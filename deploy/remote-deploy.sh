@@ -53,7 +53,7 @@ npm ci --no-audit --no-fund
 npm run build
 [[ -f "$release_dir/dist/server/entry.mjs" ]] || fail 'Astro no generó dist/server/entry.mjs'
 
-[[ -f "$env_file" ]] || fail "falta $env_file; copiar deploy/marketplace-control.env.example y completar valores"
+sudo test -f "$env_file" || fail "falta $env_file; copiar deploy/marketplace-control.env.example y completar valores"
 sudo grep -Eq '^DATABASE_URL=[^[:space:]]+$' "$env_file" || fail 'DATABASE_URL vacío o ausente en el archivo externo'
 sudo grep -Eq '^ADMIN_ACCESS_KEY=[^[:space:]]+$' "$env_file" || fail 'ADMIN_ACCESS_KEY vacío o ausente en el archivo externo'
 
