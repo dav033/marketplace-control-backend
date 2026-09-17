@@ -14,6 +14,19 @@ El puente carga `DATABASE_URL` desde
 `/etc/marketplace-control/marketplace-control.env`, que nunca entra al repo ni
 se imprime en logs. No se expone un puerto MCP público.
 
+## Desarrollo local con datos de producción
+
+Para ver la aplicación local usando PostgreSQL de EC2 sin publicar el puerto
+5432, ejecutar desde PowerShell:
+
+```powershell
+.\deploy\dev-production.ps1
+```
+
+El script abre un túnel SSH solo en `127.0.0.1:15432`, obtiene la URL protegida
+en memoria y arranca Astro en `http://127.0.0.1:4321`. Al cerrar Astro, cierra
+el túnel. No crea `.env`, no copia passwords y no expone PostgreSQL a Internet.
+
 ## Prerrequisitos de EC2
 
 EC2 debe tener Linux con `node`, `npm`, `caddy`, `systemd` y `sudo` sin contraseña para `DEPLOY_USER`. Ejecutar una vez, manualmente y por SSH:
