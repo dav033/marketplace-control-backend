@@ -1,0 +1,16 @@
+---
+import AppLayout from '../../layouts/AppLayout.astro';
+import { query, pool } from '../../lib/db';
+import { hashToken } from '../../lib/tracking';
+let providerName = 'tu negocio de eventos';
+const sent = Astro.url.searchParams.get('sent') === '1';
+if (pool) {
+  try {
+    const result = await query<{ display_name: string }>(`SELECT p.display_name FROM marketplace.campaign_sends cs JOIN marketplace.providers p ON p.provider_id = cs.provider_id WHERE cs.tracking_token_hash = $1 LIMIT 1`, [hashToken(Astro.params.token ?? '')]);
+    providerName = result.rows[0]?.display_name ?? providerName;
+  } catch { /* public form stays available while database recovers */ }
+}
+---
+<AppLayout title="Registro de proveedor" publicView>
+  <main class="public-card"><a class="brand" href="/" aria-label="Marketplace Control"><span class="brand-mark"><span></span><span></span><span></span></span><span><strong style="color:var(--ink)">marketplace</strong><small style="color:var(--ink-soft)">control room</small></span></a><p class="eyebrow" style="margin-top:34px">Perfil de proveedor</p><h1>{sent ? 'Datos recibidos' : `Cuéntanos sobre ${providerName}`}</h1><p>{sent ? 'Gracias. Revisaremos la información y te contactaremos si necesitamos datos adicionales.' : 'Completa estos datos para que podamos revisar tu oferta y contactarte sobre oportunidades de eventos. No te incluiremos en campañas sin tu autorización.'}</p>{!sent && <form class="public-form" method="post" action="/api/public/form-submit"><input type="hidden" name="token" value={Astro.params.token} /><label>Nombre de contacto<input class="form-input" name="full_name" required autocomplete="name" /></label><label>Nombre comercial<input class="form-input" name="company_name" required autocomplete="organization" /></label><label>Correo de contacto<input class="form-input" type="email" name="email" required autocomplete="email" /></label><label>Teléfono<input class="form-input" name="phone" autocomplete="tel" /></label><label>Cuéntanos qué ofreces<textarea class="form-input" name="description" required></textarea></label><label class="check"><input type="checkbox" name="privacy_consent" value="true" required />Acepto que mis datos sean usados para revisar esta solicitud y contactarme sobre este proceso.</label><label class="check"><input type="checkbox" name="marketing_consent" value="true" />Acepto recibir información comercial relacionada con eventos.</label><button class="primary-button" type="submit">Enviar datos <svg viewBox="0 0 20 20"><path d="m4 10 11-7-3 14-3-7-5-4Z"/><path d="m8.5 11.5 3.5-3.5"/></svg></button></form>}<p class="public-footer">Puedes solicitar corrección o retiro de tus datos en cualquier momento.</p></main>
+</AppLayout>

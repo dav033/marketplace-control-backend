@@ -1,0 +1,11 @@
+---
+import AppLayout from '../../layouts/AppLayout.astro';
+const campaigns = [
+  { name: 'Primer contacto · Comida y bebida', audience: '7 proveedores', status: 'Borrador', sent: '—', clicks: '—' },
+  { name: 'Seguimiento · Interés confirmado', audience: '3 proveedores', status: 'Pendiente', sent: '—', clicks: '—' },
+];
+---
+<AppLayout active="Campañas" title="Campañas">
+  <div class="page"><header class="page-header"><div><p class="eyebrow">Contacto medible</p><h1>Campañas</h1><p class="page-intro">Prepara envíos con consentimiento y observa clics sin exponer credenciales SMTP.</p></div><button class="primary-button" type="button" disabled title="Disponible en la siguiente fase">Nueva campaña</button></header><div class="notice"><span class="notice-dot"></span><span><strong>Envío protegido.</strong> Este MVP prepara la estructura; el envío SES se habilita después de validar el sandbox y el consentimiento.</span></div><section class="panel table-panel"><div class="panel-head"><span><strong>Campañas recientes</strong> · {campaigns.length}</span><span>Sin envíos ejecutados</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Campaña</th><th>Audiencia</th><th>Estado</th><th>Enviados</th><th>Clics</th><th></th></tr></thead><tbody>{campaigns.map((campaign) => <tr><td><strong>{campaign.name}</strong><div class="muted">Remitente pendiente</div></td><td>{campaign.audience}</td><td><span class="status status-under_review">{campaign.status}</span></td><td class="muted">{campaign.sent}</td><td class="muted">{campaign.clicks}</td><td><span class="text-link" aria-disabled="true">Ver</span></td></tr>)}</tbody></table></div></section></div>
+</AppLayout>
+<style>.notice{display:flex;align-items:center;gap:9px;margin:-8px 0 21px;padding:10px 13px;border:1px solid #e5d69e;border-radius:7px;color:#775e1b;background:#fff8dc;font-size:11px}.notice-dot{width:7px;height:7px;border-radius:50%;background:#d6a92d}.primary-button:disabled{cursor:not-allowed;opacity:.45;box-shadow:none;transform:none}</style>

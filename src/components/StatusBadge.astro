@@ -1,0 +1,8 @@
+---
+const { status } = Astro.props;
+const labels: Record<string, string> = {
+  candidate: 'Candidato', under_review: 'En revisión', approved: 'Aprobado', rejected: 'Rechazado', archived: 'Archivado',
+  new: 'Nuevo', reviewing: 'Revisando', converted: 'Convertido', spam: 'Spam',
+};
+---
+<span class={`status status-${status}`}>{labels[status] ?? status}</span>
