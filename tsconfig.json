@@ -4,5 +4,6 @@
     "allowJs": true,
     "baseUrl": ".",
     "paths": { "@/*": ["src/*"] }
-  }
+  },
+  "exclude": ["mcp-server"]
 }
