@@ -1,0 +1,108 @@
+name: Deploy marketplace-control
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-control-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+
+          : "${DEPLOY_HOST:?Missing GitHub secret DEPLOY_HOST}"
+          : "${DEPLOY_SSH_KEY:?Missing GitHub secret DEPLOY_SSH_KEY}"
+
+          install -d -m 700 "$HOME/.ssh"
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          ssh-keygen -y -f "$HOME/.ssh/deploy_key" > /dev/null
+
+          if [[ -n "${DEPLOY_KNOWN_HOSTS:-}" ]]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            echo 'DEPLOY_KNOWN_HOSTS no configurado; usando ssh-keyscan inicial.' >&2
+            ssh-keyscan -T 10 -H "$DEPLOY_HOST" > "$HOME/.ssh/known_hosts"
+          fi
+
+          test -s "$HOME/.ssh/known_hosts"
+
+      - name: Package committed files
+        run: |
+          set -Eeuo pipefail
+          git archive --format=tar.gz --output="$RUNNER_TEMP/marketplace-control-${GITHUB_SHA}.tar.gz" HEAD
+
+      - name: Upload release
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+
+          : "${DEPLOY_HOST:?Missing GitHub secret DEPLOY_HOST}"
+          : "${DEPLOY_USER:?Missing GitHub secret DEPLOY_USER}"
+          : "${DEPLOY_SSH_KEY:?Missing GitHub secret DEPLOY_SSH_KEY}"
+
+          ssh_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=15
+          )
+
+          scp "${ssh_opts[@]}" \
+            "$RUNNER_TEMP/marketplace-control-${GITHUB_SHA}.tar.gz" \
+            "$DEPLOY_USER@$DEPLOY_HOST:/tmp/marketplace-control-${GITHUB_SHA}.tar.gz"
+
+      - name: Deploy on EC2
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -Eeuo pipefail
+
+          : "${DEPLOY_HOST:?Missing GitHub secret DEPLOY_HOST}"
+          : "${DEPLOY_USER:?Missing GitHub secret DEPLOY_USER}"
+          : "${DEPLOY_PATH:?Missing GitHub secret DEPLOY_PATH}"
+
+          ssh_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=15
+          )
+
+          deploy_path_b64="$(printf '%s' "$DEPLOY_PATH" | base64 -w 0)"
+          deploy_user_b64="$(printf '%s' "$DEPLOY_USER" | base64 -w 0)"
+
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            bash -s -- "$deploy_path_b64" "$deploy_user_b64" "$GITHUB_SHA" \
+            < deploy/remote-deploy.sh

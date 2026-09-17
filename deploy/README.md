@@ -1,0 +1,70 @@
+# Deploy de Marketplace Control
+
+Push a `main` ejecuta `.github/workflows/deploy.yml`. El workflow empaqueta solo el commit, lo sube por SSH, ejecuta `npm ci` y `npm run build` en EC2, actualiza un symlink `current`, reinicia systemd y recarga Caddy.
+
+## Prerrequisitos de EC2
+
+EC2 debe tener Linux con `node`, `npm`, `caddy`, `systemd` y `sudo` sin contraseña para `DEPLOY_USER`. Ejecutar una vez, manualmente y por SSH:
+
+```bash
+sudo bash deploy/bootstrap-host.sh /srv/marketplace-control ec2-user
+```
+
+El script no instala credenciales ni modifica AWS. Crea directorios y el archivo externo de entorno:
+
+```text
+/etc/marketplace-control/marketplace-control.env
+```
+
+Completarlo como `root:root`, permisos `0600`, antes del primer deploy. Mínimo:
+
+```dotenv
+NODE_ENV=production
+HOST=127.0.0.1
+PORT=4321
+DATABASE_URL=postgresql://...
+ADMIN_ACCESS_KEY=...
+```
+
+No poner este archivo en GitHub ni en el repositorio. El workflow no imprime sus valores.
+
+## DNS y HTTPS
+
+Crear un registro `A`:
+
+```text
+marketplace.sempertex.com -> IP pública o Elastic IP de EC2
+```
+
+Abrir TCP `80` y `443` en el security group. `deploy/Caddyfile` hace proxy a `127.0.0.1:4321`; Caddy solicita y renueva automáticamente el certificado Let's Encrypt cuando DNS ya resuelve y los puertos son accesibles.
+
+## GitHub Secrets
+
+Configurar exactamente estos secretos del repositorio:
+
+| Secret | Valor |
+| --- | --- |
+| `DEPLOY_HOST` | DNS o IP de EC2 |
+| `DEPLOY_USER` | Usuario Linux con sudo sin contraseña |
+| `DEPLOY_SSH_KEY` | Clave privada SSH completa; nunca commitearla |
+| `DEPLOY_PATH` | Ruta absoluta, por ejemplo `/srv/marketplace-control` |
+
+Opcional y recomendado: `DEPLOY_KNOWN_HOSTS`, con la línea de host key obtenida desde una máquina confiable. Si falta, el workflow usa `ssh-keyscan` en el runner para la primera conexión.
+
+La clave pública correspondiente debe estar en `~/.ssh/authorized_keys` de EC2. No inventar ni copiar credenciales al workflow.
+
+## Idempotencia y rollback
+
+Cada SHA vive en `DEPLOY_PATH/releases/<sha>`. `current` cambia atómicamente solo después de `npm ci`, build y validación de Caddy. Si el servicio no queda activo, se intenta restaurar el release anterior. El archivo de entorno permanece fuera del repo.
+
+## Validación local
+
+Desde la raíz del proyecto:
+
+```bash
+npm run build
+bash -n deploy/bootstrap-host.sh
+bash -n deploy/remote-deploy.sh
+```
+
+El workflow no hace `git push`, no ejecuta cambios AWS y no requiere credenciales AWS.
