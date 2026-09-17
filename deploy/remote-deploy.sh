@@ -22,6 +22,8 @@ archive="/tmp/marketplace-control-${release_id}.tar.gz"
 env_file="/etc/marketplace-control/marketplace-control.env"
 unit_file="/etc/systemd/system/marketplace-control.service"
 caddy_file="/etc/caddy/Caddyfile"
+mcp_wrapper="/usr/local/bin/marketplace-control-mcp"
+mcp_sudoers="/etc/sudoers.d/marketplace-control-mcp"
 
 [[ "$deploy_path" == /* && "$deploy_path" != '/' && "$deploy_path" != *'..'* ]] || fail 'DEPLOY_PATH inválido'
 [[ "$deploy_path" =~ ^/[A-Za-z0-9._/-]+$ ]] || fail 'DEPLOY_PATH contiene caracteres no permitidos'
@@ -53,12 +55,26 @@ npm ci --no-audit --no-fund
 npm run build
 [[ -f "$release_dir/dist/server/entry.mjs" ]] || fail 'Astro no generó dist/server/entry.mjs'
 
+if [[ -f "$release_dir/mcp-server/package-lock.json" ]]; then
+  cd "$release_dir/mcp-server"
+  npm ci --no-audit --no-fund
+  npm run build
+  [[ -f "$release_dir/mcp-server/dist/index.js" ]] || fail 'MCP no generó dist/index.js'
+  cd "$release_dir"
+fi
+
 sudo test -f "$env_file" || fail "falta $env_file; copiar deploy/marketplace-control.env.example y completar valores"
 sudo grep -Eq '^DATABASE_URL=[^[:space:]]+$' "$env_file" || fail 'DATABASE_URL vacío o ausente en el archivo externo'
 sudo grep -Eq '^ADMIN_ACCESS_KEY=[^[:space:]]+$' "$env_file" || fail 'ADMIN_ACCESS_KEY vacío o ausente en el archivo externo'
 
 node_bin="$(command -v node)"
 sudo install -d -m 0750 -o root -g root /etc/marketplace-control
+sudo install -m 0755 -o root -g root "$release_dir/deploy/mcp-stdio.sh" "$mcp_wrapper"
+sudo tee "$mcp_sudoers" >/dev/null <<SUDOERS
+$app_user ALL=(root) NOPASSWD: $mcp_wrapper ""
+SUDOERS
+sudo chmod 0440 "$mcp_sudoers"
+sudo visudo -cf "$mcp_sudoers" >/dev/null
 
 sudo tee "$unit_file" >/dev/null <<UNIT
 [Unit]

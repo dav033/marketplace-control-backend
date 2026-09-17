@@ -2,6 +2,18 @@
 
 Push a `main` ejecuta `.github/workflows/deploy.yml`. El workflow empaqueta solo el commit, lo sube por SSH, ejecuta `npm ci` y `npm run build` en EC2, actualiza un symlink `current`, reinicia systemd y recarga Caddy.
 
+## MCP remoto por SSH
+
+El MCP usa transporte `stdio`. En cada deploy se instala y compila en
+`current/mcp-server`, y queda disponible mediante el puente root-only
+`/usr/local/bin/marketplace-control-mcp`. El cliente MCP local debe ejecutar
+SSH con la clave privada y el usuario de despliegue; usar como plantilla
+`deploy/mcp-client-config.example.json` y reemplazar la ruta de la clave.
+
+El puente carga `DATABASE_URL` desde
+`/etc/marketplace-control/marketplace-control.env`, que nunca entra al repo ni
+se imprime en logs. No se expone un puerto MCP público.
+
 ## Prerrequisitos de EC2
 
 EC2 debe tener Linux con `node`, `npm`, `caddy`, `systemd` y `sudo` sin contraseña para `DEPLOY_USER`. Ejecutar una vez, manualmente y por SSH:

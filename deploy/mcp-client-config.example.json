@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "marketplace-control": {
+      "command": "ssh",
+      "args": [
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-i",
+        "C:/RUTA/marketplace-aws",
+        "ec2-user@54.167.34.107",
+        "sudo",
+        "-n",
+        "/usr/local/bin/marketplace-control-mcp"
+      ]
+    }
+  }
+}
