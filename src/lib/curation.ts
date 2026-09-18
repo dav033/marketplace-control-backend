@@ -20,6 +20,7 @@ export const CURATION_HEADERS = [
 ] as const;
 
 export type ProviderType = 1 | 2;
+export type ContactChannel = 'email' | 'whatsapp';
 
 export type CurationFields = {
   id: string;
@@ -55,6 +56,7 @@ export type ParsedCurationRow = {
   rawRecord: Record<string, string>;
   fields?: CurationFields;
   providerType?: ProviderType;
+  contactChannel?: ContactChannel;
   issues: CurationIssue[];
 };
 
@@ -66,12 +68,14 @@ export type ParsedCurationBatch = {
 export type ValidatedCurationRow = ParsedCurationRow & {
   fields: CurationFields;
   providerType: ProviderType;
+  contactChannel: ContactChannel;
   dedupeKey: string;
   rawEvidence: {
     rawTsv: string;
     rawColumns: Record<string, string>;
     normalized: CurationFields;
     providerType: ProviderType;
+    contactChannel: ContactChannel;
   };
 };
 
@@ -117,25 +121,25 @@ const CATEGORY_CODE: Record<string, string> = {
 };
 
 const ZONE_BY_KEY: Record<string, string> = {
-  'zona norte / comercial alta': 'Zona Norte / Comercial Alta',
-  'zona centro / tradicional': 'Zona Centro / Tradicional',
-  'zona sur / occidente comercial': 'Zona Sur / Occidente Comercial',
-  'zona campestre / periferia': 'Zona Campestre / Periferia',
+  'zona norte comercial alta': 'Zona Norte / Comercial Alta',
+  'zona centro tradicional': 'Zona Centro / Tradicional',
+  'zona sur occidente comercial': 'Zona Sur / Occidente Comercial',
+  'zona campestre periferia': 'Zona Campestre / Periferia',
   'area metropolitana': 'Área Metropolitana',
   'cobertura nacional': 'Cobertura Nacional',
   'sin dato': 'Sin dato',
 };
 
 const SCALE_BY_KEY: Record<string, string> = {
-  'pequeno (hasta 50 pers.)': 'Pequeño (Hasta 50 pers.)',
-  'mediano (50 a 200 pers.)': 'Mediano (50 a 200 pers.)',
-  'masivo (mas de 200 pers.)': 'Masivo (Más de 200 pers.)',
+  'pequeno hasta 50 pers': 'Pequeño (Hasta 50 pers.)',
+  'mediano 50 a 200 pers': 'Mediano (50 a 200 pers.)',
+  'masivo mas de 200 pers': 'Masivo (Más de 200 pers.)',
   'sin dato': 'Sin dato',
 };
 
 const FORMALITY_BY_KEY: Record<string, string> = {
-  'formalizado (nit - empresa)': 'Formalizado (NIT - Empresa)',
-  'independiente (rut - persona natural)': 'Independiente (RUT - Persona Natural)',
+  'formalizado nit empresa': 'Formalizado (NIT - Empresa)',
+  'independiente rut persona natural': 'Independiente (RUT - Persona Natural)',
   'no verificado': 'No verificado',
 };
 
@@ -151,6 +155,12 @@ const PLATFORM_BY_KEY: Record<string, string> = {
   didi: 'DiDi',
   'didi food': 'DiDi',
 };
+
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'hotmail.com', 'outlook.com', 'live.com',
+  'msn.com', 'yahoo.com', 'icloud.com', 'proton.me', 'protonmail.com',
+  'aol.com', 'mail.com',
+]);
 
 const EXPECTED_HEADER_KEYS = CURATION_HEADERS.map(header => normalizeKey(header));
 
@@ -250,6 +260,40 @@ function inferProviderType(fields: Pick<CurationFields, 'category' | 'displayNam
   return madeToOrder && !conventionalRestaurant ? 2 : 1;
 }
 
+function emailDomain(email: string): string | undefined {
+  if (normalizeKey(email) === 'sin dato') return undefined;
+  return email.split('@')[1]?.toLowerCase();
+}
+
+export function isCorporateEmail(fields: Pick<CurationFields, 'email'>): boolean {
+  const domain = emailDomain(fields.email);
+  return Boolean(domain && !FREE_EMAIL_DOMAINS.has(domain));
+}
+
+export function hasWhatsappPhone(fields: Pick<CurationFields, 'phone'>): boolean {
+  return /^\+57 3\d{2} /.test(fields.phone);
+}
+
+export function inferContactChannel(fields: Pick<CurationFields, 'email' | 'phone' | 'scale'>): ContactChannel {
+  const hasEmail = normalizeKey(fields.email) !== 'sin dato';
+  const largeCompany = fields.scale === 'Mediano (50 a 200 pers.)' || fields.scale === 'Masivo (Más de 200 pers.)';
+  if (hasEmail && (largeCompany || isCorporateEmail(fields))) return 'email';
+  return 'whatsapp';
+}
+
+export function summarizeContactChannels(rows: Pick<ValidatedCurationRow, 'fields' | 'contactChannel'>[]) {
+  return rows.reduce((summary, row) => {
+    summary[row.contactChannel] += 1;
+    summary[`${row.contactChannel}Providers`].push(row.fields.displayName);
+    return summary;
+  }, {
+    email: 0,
+    whatsapp: 0,
+    emailProviders: [] as string[],
+    whatsappProviders: [] as string[],
+  });
+}
+
 function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord: Record<string, string>): ParsedCurationRow {
   const issues: CurationIssue[] = [];
   if (cells.some(cell => cleanText(cell) === '')) issues.push(issue(line, 'empty_cell', 'Cada columna debe tener un valor; usa "Sin dato" o "Sin Redes" cuando corresponda.'));
@@ -319,6 +363,7 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
       verificationDate,
     };
     const providerType = inferProviderType(normalizedFields);
+    const contactChannel = inferContactChannel(normalizedFields);
     const minimumReviews = providerType === 1 ? 50 : 15;
     const expectedLevel = reviewCount >= 50 ? 'A' : 'B';
     if (reviewCount < minimumReviews) issues.push(issue(line, 'insufficient_reviews', `Tipo ${providerType} requiere al menos ${minimumReviews} reseñas exactas.`));
@@ -329,8 +374,10 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
     const reasonHasReviews = new RegExp(`(?:^|\\D)${reviewCount}(?:\\D|$)`).test(curationReason.replace(/[.,]/g, ' '));
     const reasonHasPlatform = reasonKey.includes(normalizeKey(platform));
     if (!reasonHasRating || !reasonHasReviews || !reasonHasPlatform) issues.push(issue(line, 'invalid_curation_reason', 'La justificación debe conservar calificación, reseñas y plataforma de la evidencia.'));
+    if (contactChannel === 'email' && normalizeKey(email) === 'sin dato') issues.push(issue(line, 'missing_email_contact', 'Las empresas clasificadas para correo deben tener un correo corporativo verificable.'));
+    if (contactChannel === 'whatsapp' && !hasWhatsappPhone(normalizedFields)) issues.push(issue(line, 'missing_whatsapp_contact', 'Las empresas clasificadas para WhatsApp deben tener un número móvil colombiano verificable.'));
 
-    return { line, rawLine, rawCells: cells, rawRecord, fields: normalizedFields, providerType, issues };
+    return { line, rawLine, rawCells: cells, rawRecord, fields: normalizedFields, providerType, contactChannel, issues };
   }
 
   return { line, rawLine, rawCells: cells, rawRecord, issues };
@@ -399,12 +446,14 @@ export function validateCurationBatch(parsed: ParsedCurationBatch): CurationBatc
       ...row,
       fields,
       providerType,
+      contactChannel: row.contactChannel!,
       dedupeKey,
       rawEvidence: {
         rawTsv: row.rawLine,
         rawColumns: row.rawRecord,
         normalized: fields,
         providerType,
+        contactChannel: row.contactChannel!,
       },
     });
   }

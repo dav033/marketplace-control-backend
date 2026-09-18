@@ -8,7 +8,7 @@ export async function getDashboard(): Promise<DashboardData> {
   try {
     const [providers, registrations, counts] = await Promise.all([
       query<Provider>(`
-        SELECT p.provider_id, p.display_name, p.category, p.city, p.rating, p.review_count,
+        SELECT p.provider_id, p.display_name, p.category, p.city, p.rating, p.review_count, p.contact_channel,
                p.status, p.discovery_source,
                c.email AS contact_email,
                to_char(GREATEST(p.updated_at, COALESCE(rs.created_at, p.updated_at)), 'DD Mon, HH24:MI') AS last_activity
@@ -46,7 +46,7 @@ export async function getDashboard(): Promise<DashboardData> {
 export async function getProvider(id: string) {
   if (!pool || id.startsWith('demo-')) return demoProvider(id);
   const result = await query<Provider>(`
-    SELECT p.provider_id, p.display_name, p.category, p.city, p.rating, p.review_count,
+    SELECT p.provider_id, p.display_name, p.category, p.city, p.rating, p.review_count, p.contact_channel,
            p.status, p.discovery_source, c.email AS contact_email, NULL AS last_activity
     FROM marketplace.providers p
     LEFT JOIN LATERAL (

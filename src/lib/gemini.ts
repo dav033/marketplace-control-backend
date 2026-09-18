@@ -1,4 +1,4 @@
-import { CURATION_HEADERS, parseCurationTsv, validateCurationBatch } from './curation';
+import { CURATION_HEADERS, parseCurationTsv, summarizeContactChannels, validateCurationBatch } from './curation';
 
 const GEMINI_INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
@@ -42,6 +42,7 @@ export type GeminiCurationResult = {
   accepted: number;
   rejected: number;
   rejectedRows: ReturnType<typeof validateCurationBatch>['rejected'];
+  contactSummary: ReturnType<typeof summarizeContactChannels>;
 };
 
 export async function curateProviders(input: { city: string; category: string; instructions?: string }): Promise<GeminiCurationResult> {
@@ -63,6 +64,8 @@ Cumple: calificación mínima 4.5; Tipo 1 (lugares/restaurantes) requiere mínim
 Nivel A corresponde a 50 o más reseñas. Nivel B solo se permite para Tipo 2 con 15 a 49 reseñas.
 Si un dato no es público usa exactamente "Sin dato"; para Instagram ausente usa "Sin Redes".
 La justificación debe incluir la calificación, cantidad de reseñas, plataforma, evidencia publicada de servicios para eventos y actividad publicada dentro de los últimos 12 meses.
+Separa el canal de contacto de forma conservadora: prioriza CORREO para empresas medianas o masivas cuando exista un correo válido, o para cualquier empresa que tenga un dominio/correo corporativo propio verificable (no Gmail, Hotmail, Outlook, Yahoo ni similares). Para empresas pequeñas o con correo gratuito, usa WHATSAPP solo si hay un número móvil colombiano público y verificable. Si no existe correo corporativo ni móvil para WhatsApp, no incluyas el candidato.
+Cuando el canal sea CORREO, rellena el correo corporativo real y, si existe, también el teléfono. Cuando el canal sea WHATSAPP, prioriza el número móvil real y usa "Sin dato" en correo si el correo no es corporativo; nunca inventes datos ni conviertas un teléfono fijo en WhatsApp.
 Los IDs deben tener formato ABC-CC-###, donde CC es el código: Lugar 01, Comida y Bebida 02, Música 03, Servicios Especializados 04, Entretenimiento 05, Decoración temática 06, Fotografía y Video 07, Invitación digital 08, Menaje y mantelería 09, Carpas y mobiliario 10.
 Devuelve un objeto JSON con exactamente dos campos: "tsv" y "research_summary". En "tsv" incluye la línea de encabezados exacta ${JSON.stringify(CURATION_HEADERS.join('\t'))}, seguida de una fila por candidato con las 18 columnas separadas por tabulaciones. No uses tablas Markdown; no uses barras verticales dentro de las celdas. No incluyas explicaciones fuera del JSON solicitado.`;
 
@@ -93,6 +96,7 @@ Devuelve un objeto JSON con exactamente dos campos: "tsv" y "research_summary". 
   if (typeof parsed.tsv !== 'string' || !parsed.tsv.trim()) throw new Error('GEMINI_NO_ROWS');
   const tsv = parsed.tsv;
   const validation = validateCurationBatch(parseCurationTsv(tsv));
+  const contactSummary = summarizeContactChannels(validation.accepted);
   return {
     tsv,
     researchSummary: parsed.research_summary || 'Investigación completada; revisa las fuentes antes de importar.',
@@ -100,5 +104,6 @@ Devuelve un objeto JSON con exactamente dos campos: "tsv" y "research_summary". 
     accepted: validation.accepted.length,
     rejected: validation.rejected.length,
     rejectedRows: validation.rejected,
+    contactSummary,
   };
 }

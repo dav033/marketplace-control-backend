@@ -1,4 +1,5 @@
 export type ProviderStatus = 'candidate' | 'under_review' | 'approved' | 'rejected' | 'archived';
+export type ContactChannel = 'email' | 'whatsapp';
 
 export type Provider = {
   provider_id: string;
@@ -7,6 +8,7 @@ export type Provider = {
   city: string;
   rating: number | null;
   review_count: number | null;
+  contact_channel: ContactChannel;
   status: ProviderStatus;
   discovery_source: string | null;
   contact_email: string | null;

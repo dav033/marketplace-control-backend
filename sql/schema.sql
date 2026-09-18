@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS marketplace.providers (
   longitude numeric(9,6),
   rating numeric(2,1),
   review_count integer,
+  contact_channel text NOT NULL DEFAULT 'whatsapp' CHECK (contact_channel IN ('email','whatsapp')),
   status text NOT NULL DEFAULT 'candidate' CHECK (status IN ('candidate','under_review','approved','rejected','archived')),
   discovery_source text,
   notes text,
@@ -31,6 +32,21 @@ CREATE TABLE IF NOT EXISTS marketplace.providers (
   CHECK (latitude IS NULL OR latitude BETWEEN -90 AND 90),
   CHECK (longitude IS NULL OR longitude BETWEEN -180 AND 180)
 );
+
+ALTER TABLE marketplace.providers
+  ADD COLUMN IF NOT EXISTS contact_channel text NOT NULL DEFAULT 'whatsapp';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'providers_contact_channel_check'
+      AND conrelid = 'marketplace.providers'::regclass
+  ) THEN
+    ALTER TABLE marketplace.providers
+      ADD CONSTRAINT providers_contact_channel_check CHECK (contact_channel IN ('email','whatsapp'));
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS marketplace.provider_sources (
   provider_source_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

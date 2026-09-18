@@ -416,6 +416,25 @@ y del cliente local:
 - La aplicación web, PostgreSQL, `/api/ai/curation`, Gemini y la clave de
   administración permanecen intactos.
 
+## 13. Selección de búsqueda y canales de contacto — 2026-09-18
+
+El panel Gemini ahora permite escoger una ciudad y una categoría desde controles
+obligatorios antes de lanzar cada búsqueda. La clasificación de contacto queda
+persistida en `marketplace.providers.contact_channel`:
+
+- `email`: correo válido cuando la empresa es mediana/masiva o cuando el correo
+  usa un dominio corporativo propio.
+- `whatsapp`: empresas pequeñas o con correo gratuito, siempre que exista un
+  móvil colombiano verificable.
+- Si no existe correo corporativo ni móvil utilizable para WhatsApp, la fila se
+  rechaza y conserva el motivo en la vista previa.
+
+Los correos públicos se guardan como contactos con consentimiento `unknown`, por
+lo que no entran en campañas hasta que exista consentimiento de marketing. Los
+proveedores con WhatsApp conservan el móvil en `providers.phone`. La tabla y la
+ficha de proveedor muestran el canal, y la vista previa separa los nombres y
+conteos de cada grupo.
+
 ## 9. Historial de commits relevantes
 
 ```text

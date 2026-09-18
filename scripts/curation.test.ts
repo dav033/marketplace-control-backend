@@ -24,7 +24,7 @@ function row(overrides: Record<number, string> = {}) {
     '4.8 con 15 reseñas en Google; servicio de música para eventos publicado.',
     '+57 315 721-8407',
     '@banda.prueba',
-    'CONTACTO@EJEMPLO.COM',
+    'CONTACTO@GMAIL.COM',
     'https://www.google.com/maps/place/Banda+Prueba',
     '2026-09-17',
   ];
@@ -42,9 +42,18 @@ const valid = parseOne(`${header}\n${row()}`);
 assert.equal(valid.accepted.length, 1);
 assert.equal(valid.rejected.length, 0);
 assert.equal(valid.accepted[0].fields.phone, '+57 315 7218407');
-assert.equal(valid.accepted[0].fields.email, 'contacto@ejemplo.com');
+assert.equal(valid.accepted[0].fields.email, 'contacto@gmail.com');
 assert.equal(valid.accepted[0].providerType, 2);
+assert.equal(valid.accepted[0].contactChannel, 'whatsapp');
 assert.deepEqual(valid.accepted[0].rawEvidence.rawColumns['Nombre Comercial'], 'Banda Prueba');
+
+const corporateEmail = parseOne(`${header}\n${row({ 6: 'Mediano (50 a 200 pers.)', 13: 'Sin dato', 15: 'ventas@bandaprueba.com', 16: 'https://bandaprueba.com/proveedores/banda' })}`);
+assert.equal(corporateEmail.accepted.length, 1);
+assert.equal(corporateEmail.accepted[0].contactChannel, 'email');
+
+const noActionableContact = parseOne(`${header}\n${row({ 13: 'Sin dato', 15: 'Sin dato' })}`);
+assert.equal(noActionableContact.accepted.length, 0);
+assert.ok(noActionableContact.rejected[0].issues.some(item => item.code === 'missing_whatsapp_contact'));
 
 const typeOneTooFew = parseOne(`${header}\n${row({ 0: 'MDE-01-001', 2: 'Lugar', 9: '49', 10: 'Google', 11: 'B', 12: '4.8 con 49 reseñas en Google; salón de eventos publicado.', 16: 'https://example.com/venue' })}`);
 assert.equal(typeOneTooFew.accepted.length, 0);
