@@ -17,6 +17,12 @@ node /srv/marketplace-control/current/mcp-server/dist/index.js
 No se abre un puerto MCP público y no se copia `DATABASE_URL` al equipo local.
 El wrapper remoto la carga desde el archivo de entorno protegido de EC2.
 
+En el equipo de desarrollo usado para este proyecto, la conexión quedó registrada
+en Claude Code con un wrapper local que usa AWS EC2 Instance Connect. Cada inicio
+genera una clave Ed25519 temporal, la publica durante el TTL de Instance Connect y
+la elimina al cerrar; no se dejó una clave privada persistente ni se modificó
+permanentemente `authorized_keys`.
+
 ## Prerrequisitos
 
 En EC2 debe haberse ejecutado al menos un deploy exitoso después de instalar el
@@ -106,6 +112,31 @@ transporta MCP por stdio, por lo que debe configurarse como servidor local si
 esa opción está disponible en tu versión.
 
 ## Claude Code
+
+### Configuración efímera con EC2 Instance Connect
+
+Si la cuenta AWS local tiene una sesión válida, esta variante evita guardar una
+clave SSH permanente:
+
+```powershell
+claude mcp add --scope user marketplace-control -- `
+  pwsh.exe -NoLogo -NoProfile -NonInteractive `
+  -File "$env:USERPROFILE\.local\bin\marketplace-control-mcp-ephemeral.ps1"
+```
+
+El wrapper debe contener únicamente los identificadores públicos de región,
+instancia y usuario SSH; el perfil AWS se obtiene de la sesión local. Verifica el
+estado con:
+
+```powershell
+claude mcp get marketplace-control
+claude mcp list
+```
+
+La salida esperada incluye `marketplace-control ... √ Connected`. Si la sesión AWS
+expira, vuelve a autenticar el perfil con `aws login` y repite la comprobación.
+
+### Configuración con clave SSH permanente
 
 La forma más sencilla es registrar el comando stdio en el alcance del usuario.
 Ejecuta PowerShell desde una terminal donde `claude` esté instalado:

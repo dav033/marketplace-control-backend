@@ -283,9 +283,25 @@ proveedores curados, importarlos de forma segura y permitir campañas desde el p
 - `git diff --check` ✅
 
 Antes de hacer un envío real todavía deben estar resueltos la identidad/DKIM y el
-estado de producción de SES. La conexión Claude/MCP requiere además una clave SSH
-local válida para `ec2-user`; no se guardan claves, `DATABASE_URL` ni tokens en el
+estado de producción de SES. La conexión Claude/MCP usa una clave SSH efímera en
+esta máquina; no se guardan claves privadas, `DATABASE_URL` ni tokens en el
 repositorio.
+
+### Conexión Claude verificada
+
+La conexión quedó registrada en Claude Code con alcance de usuario y se verificó
+con `claude mcp list`:
+
+- Servidor: `marketplace-control` — `stdio` sobre SSH.
+- Estado verificado: `√ Connected`.
+- Wrapper local: `%USERPROFILE%\\.local\\bin\\marketplace-control-mcp-ephemeral.ps1`.
+- Autenticación SSH: clave Ed25519 efímera publicada por EC2 Instance Connect;
+  no se dejó acceso persistente en `authorized_keys`.
+- Perfil AWS local usado: `marketplace-login2`, obtenido de la sesión AWS del
+  navegador para la cuenta de la instancia.
+
+La plantilla con clave permanente sigue disponible como alternativa en
+`deploy/mcp-client-config.example.json`, pero no fue necesaria para esta conexión.
 
 Para la limpieza hay que elegir explícitamente:
 
