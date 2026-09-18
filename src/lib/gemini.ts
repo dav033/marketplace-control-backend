@@ -2,69 +2,17 @@ import { CURATION_HEADERS, parseCurationTsv, validateCurationBatch } from './cur
 
 const GEMINI_INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
-const rowSchema = {
-  type: 'object',
-  properties: {
-    id: { type: 'string' },
-    display_name: { type: 'string' },
-    category: { type: 'string' },
-    segment: { type: 'string' },
-    city: { type: 'string' },
-    zone: { type: 'string' },
-    scale: { type: 'string' },
-    formality: { type: 'string' },
-    rating: { type: 'string' },
-    review_count: { type: 'string' },
-    reputation_platform: { type: 'string' },
-    curation_level: { type: 'string' },
-    curation_reason: { type: 'string' },
-    phone: { type: 'string' },
-    instagram: { type: 'string' },
-    email: { type: 'string' },
-    source_url: { type: 'string' },
-    verification_date: { type: 'string' },
-  },
-};
-
 const responseSchema = {
   type: 'object',
   properties: {
-    rows: { type: 'array', items: rowSchema },
+    tsv: { type: 'string', description: 'TSV con el encabezado y filas de curaduría.' },
     research_summary: { type: 'string' },
   },
-  required: ['rows', 'research_summary'],
-};
-
-type GeminiRow = {
-  id: string;
-  display_name: string;
-  category: string;
-  segment: string;
-  city: string;
-  zone: string;
-  scale: string;
-  formality: string;
-  rating: string | number;
-  review_count: string | number;
-  reputation_platform: string;
-  curation_level: string;
-  curation_reason: string;
-  phone: string;
-  instagram: string;
-  email: string;
-  source_url: string;
-  verification_date: string;
+  required: ['tsv', 'research_summary'],
 };
 
 function env(name: string): string | undefined {
   return import.meta.env[name] ?? process.env[name];
-}
-
-function cell(value: unknown): string {
-  return String(value ?? 'Sin dato')
-    .replace(/[\t\r\n]+/g, ' ')
-    .replace(/\|/g, '/')
-    .trim() || 'Sin dato';
 }
 
 function extractOutputText(body: Record<string, unknown>): string | undefined {
@@ -85,31 +33,6 @@ function extractOutputText(body: Record<string, unknown>): string | undefined {
     }
   }
   return undefined;
-}
-
-function toTsv(rows: GeminiRow[]): string {
-  const today = new Date().toISOString().slice(0, 10);
-  const lines = rows.map((row, index) => [
-    cell(row.id || `GEN-00-${String(index + 1).padStart(3, '0')}`),
-    cell(row.display_name),
-    cell(row.category),
-    cell(row.segment),
-    cell(row.city),
-    cell(row.zone),
-    cell(row.scale),
-    cell(row.formality),
-    Number(row.rating).toFixed(1),
-    String(Math.trunc(Number(row.review_count))),
-    cell(row.reputation_platform),
-    cell(row.curation_level),
-    cell(row.curation_reason),
-    cell(row.phone),
-    cell(row.instagram),
-    cell(row.email),
-    cell(row.source_url),
-    /^\d{4}-\d{2}-\d{2}$/.test(row.verification_date) ? row.verification_date : today,
-  ]);
-  return [CURATION_HEADERS.join('\t'), ...lines.map(line => line.join('\t'))].join('\n');
 }
 
 export type GeminiCurationResult = {
@@ -141,7 +64,7 @@ Nivel A corresponde a 50 o más reseñas. Nivel B solo se permite para Tipo 2 co
 Si un dato no es público usa exactamente "Sin dato"; para Instagram ausente usa "Sin Redes".
 La justificación debe incluir la calificación, cantidad de reseñas, plataforma, evidencia publicada de servicios para eventos y actividad publicada dentro de los últimos 12 meses.
 Los IDs deben tener formato ABC-CC-###, donde CC es el código: Lugar 01, Comida y Bebida 02, Música 03, Servicios Especializados 04, Entretenimiento 05, Decoración temática 06, Fotografía y Video 07, Invitación digital 08, Menaje y mantelería 09, Carpas y mobiliario 10.
-No incluyas encabezados, markdown ni explicaciones fuera del JSON solicitado.`;
+Devuelve un objeto JSON con exactamente dos campos: "tsv" y "research_summary". En "tsv" incluye la línea de encabezados exacta ${JSON.stringify(CURATION_HEADERS.join('\t'))}, seguida de una fila por candidato con las 18 columnas separadas por tabulaciones. No uses tablas Markdown; no uses barras verticales dentro de las celdas. No incluyas explicaciones fuera del JSON solicitado.`;
 
   const response = await fetch(GEMINI_INTERACTIONS_URL, {
     method: 'POST',
@@ -161,15 +84,14 @@ No incluyas encabezados, markdown ni explicaciones fuera del JSON solicitado.`;
 
   const outputText = extractOutputText(body);
   if (!outputText) throw new Error('GEMINI_EMPTY_RESPONSE');
-  let parsed: { rows?: GeminiRow[]; research_summary?: string };
+  let parsed: { tsv?: string; research_summary?: string };
   try {
-    parsed = JSON.parse(outputText) as { rows?: GeminiRow[]; research_summary?: string };
+    parsed = JSON.parse(outputText) as { tsv?: string; research_summary?: string };
   } catch {
     throw new Error('GEMINI_INVALID_JSON');
   }
-  if (!Array.isArray(parsed.rows) || parsed.rows.length === 0) throw new Error('GEMINI_NO_ROWS');
-
-  const tsv = toTsv(parsed.rows);
+  if (typeof parsed.tsv !== 'string' || !parsed.tsv.trim()) throw new Error('GEMINI_NO_ROWS');
+  const tsv = parsed.tsv;
   const validation = validateCurationBatch(parseCurationTsv(tsv));
   return {
     tsv,
