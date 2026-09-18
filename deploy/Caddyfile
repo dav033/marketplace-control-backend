@@ -1,25 +1,13 @@
 (marketplace_control) {
     encode zstd gzip
 
-    handle /mcp* {
-        reverse_proxy 127.0.0.1:4322
-    }
-
-    handle /.well-known/* {
-        reverse_proxy 127.0.0.1:4322
-    }
-
-    handle /oauth/* {
-        reverse_proxy 127.0.0.1:4322
-    }
-
     handle {
         reverse_proxy 127.0.0.1:4321
     }
 }
 
 # Public fallback while the company DNS record is being configured. The IP is
-# intentionally explicit so Claude Web has a stable HTTPS hostname today.
+# intentionally explicit so the application has a stable HTTPS hostname today.
 54-167-34-107.sslip.io {
     import marketplace_control
 }

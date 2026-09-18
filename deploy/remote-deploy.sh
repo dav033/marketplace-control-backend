@@ -22,9 +22,6 @@ archive="/tmp/marketplace-control-${release_id}.tar.gz"
 env_file="/etc/marketplace-control/marketplace-control.env"
 unit_file="/etc/systemd/system/marketplace-control.service"
 caddy_file="/etc/caddy/Caddyfile"
-mcp_wrapper="/usr/local/bin/marketplace-control-mcp"
-mcp_sudoers="/etc/sudoers.d/marketplace-control-mcp"
-mcp_unit_file="/etc/systemd/system/marketplace-control-mcp.service"
 
 [[ "$deploy_path" == /* && "$deploy_path" != '/' && "$deploy_path" != *'..'* ]] || fail 'DEPLOY_PATH inválido'
 [[ "$deploy_path" =~ ^/[A-Za-z0-9._/-]+$ ]] || fail 'DEPLOY_PATH contiene caracteres no permitidos'
@@ -56,14 +53,6 @@ npm ci --no-audit --no-fund
 npm run build
 [[ -f "$release_dir/dist/server/entry.mjs" ]] || fail 'Astro no generó dist/server/entry.mjs'
 
-if [[ -f "$release_dir/mcp-server/package-lock.json" ]]; then
-  cd "$release_dir/mcp-server"
-  npm ci --no-audit --no-fund
-  npm run build
-  [[ -f "$release_dir/mcp-server/dist/index.js" ]] || fail 'MCP no generó dist/index.js'
-  cd "$release_dir"
-fi
-
 sudo test -f "$env_file" || fail "falta $env_file; copiar deploy/marketplace-control.env.example y completar valores"
 sudo grep -Eq '^DATABASE_URL=[^[:space:]]+$' "$env_file" || fail 'DATABASE_URL vacío o ausente en el archivo externo'
 sudo grep -Eq '^ADMIN_ACCESS_KEY=[^[:space:]]+$' "$env_file" || fail 'ADMIN_ACCESS_KEY vacío o ausente en el archivo externo'
@@ -77,12 +66,20 @@ fi
 
 node_bin="$(command -v node)"
 sudo install -d -m 0750 -o root -g root /etc/marketplace-control
-sudo install -m 0755 -o root -g root "$release_dir/deploy/mcp-stdio.sh" "$mcp_wrapper"
-sudo tee "$mcp_sudoers" >/dev/null <<SUDOERS
-$app_user ALL=(root) NOPASSWD: $mcp_wrapper ""
-SUDOERS
-sudo chmod 0440 "$mcp_sudoers"
-sudo visudo -cf "$mcp_sudoers" >/dev/null
+
+# Gemini reemplazó el flujo MCP. Retirar cualquier instalación histórica sin
+# tocar la aplicación, la base de datos ni el archivo de entorno protegido.
+sudo systemctl disable --now marketplace-control-mcp.service >/dev/null 2>&1 || true
+sudo rm -f -- \
+  /etc/systemd/system/marketplace-control-mcp.service \
+  /usr/local/bin/marketplace-control-mcp \
+  /etc/sudoers.d/marketplace-control-mcp
+
+# Quitar también copias históricas del servidor MCP de releases antiguas,
+# conservando intactos los demás artefactos de cada release.
+while IFS= read -r -d '' old_mcp_dir; do
+  rm -rf -- "$old_mcp_dir"
+done < <(find "$deploy_path/releases" -mindepth 2 -maxdepth 2 -type d -name mcp-server -print0)
 
 sudo tee "$unit_file" >/dev/null <<UNIT
 [Unit]
@@ -98,31 +95,6 @@ EnvironmentFile=$env_file
 EnvironmentFile=-/etc/marketplace-control/gemini.env
 Environment=NODE_ENV=production
 ExecStart=$node_bin $deploy_path/current/dist/server/entry.mjs
-Restart=on-failure
-RestartSec=5
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectHome=read-only
-ProtectSystem=full
-ReadWritePaths=$deploy_path
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-sudo tee "$mcp_unit_file" >/dev/null <<UNIT
-[Unit]
-Description=Marketplace Control MCP HTTP
-After=network-online.target marketplace-control.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$app_user
-WorkingDirectory=$deploy_path/current/mcp-server
-EnvironmentFile=$env_file
-Environment=MCP_TRANSPORT=http
-ExecStart=$node_bin $deploy_path/current/mcp-server/dist/http.js
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -160,11 +132,6 @@ if ! sudo systemctl restart marketplace-control.service || ! sudo systemctl is-a
     sudo systemctl restart marketplace-control.service || true
   fi
   fail 'el servicio Astro no quedó activo; se intentó rollback'
-fi
-
-sudo systemctl enable marketplace-control-mcp.service >/dev/null
-if ! sudo systemctl restart marketplace-control-mcp.service || ! sudo systemctl is-active --quiet marketplace-control-mcp.service; then
-  fail 'el servicio MCP HTTP no quedó activo'
 fi
 
 sudo systemctl enable --now caddy.service >/dev/null

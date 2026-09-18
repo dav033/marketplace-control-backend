@@ -84,11 +84,10 @@ Comportamiento decidido:
 2. GitHub empaqueta el commit exacto y lo sube por SSH.
 3. EC2 crea una release con el SHA del commit.
 4. Ejecuta `npm ci` y `npm run build` de Astro.
-5. Compila también `mcp-server`.
-6. Cambia atómicamente `/srv/marketplace-control/current`.
-7. Reinicia el servicio Astro.
-8. Valida y recarga Caddy.
-9. Si Astro falla, intenta rollback a la release anterior.
+5. Cambia atómicamente `/srv/marketplace-control/current`.
+6. Reinicia el servicio Astro.
+7. Valida y recarga Caddy.
+8. Si Astro falla, intenta rollback a la release anterior.
 
 Secrets configurados en GitHub Actions — solo nombres, nunca valores:
 
@@ -143,7 +142,11 @@ Puertos habilitados en el Security Group:
 
 Decisión de seguridad: no abrir TCP 5432 públicamente. Más adelante se recomienda sustituir SSH público para deploy por runner privado o AWS Systems Manager/SSM.
 
-## 5. MCP
+## 5. MCP (histórico; retirado el 2026-09-18)
+
+Este apartado conserva el registro de la implementación anterior. El MCP ya no
+forma parte del producto activo: la curaduría se ejecuta desde Gemini dentro del
+panel. Las referencias siguientes son únicamente historial técnico.
 
 Ubicación del código:
 
@@ -225,7 +228,7 @@ Decisiones tomadas:
 - Mantener secretos fuera del repositorio.
 - Usar Caddy para reverse proxy y HTTPS automático.
 - Desplegar exclusivamente desde `main`.
-- Usar MCP por SSH/stdio sin puerto público.
+- Usar Gemini dentro del panel para la curaduría, con validación local y confirmación explícita.
 - Acceder a producción desde desarrollo mediante túnel SSH, no exponiendo PostgreSQL.
 - Dejar `.claude/` local sin versionar porque no forma parte del runtime.
 
@@ -253,7 +256,7 @@ proveedores curados, importarlos de forma segura y permitir campañas desde el p
 - `scripts/curation.test.ts` cubre filas válidas, umbrales, URL de búsqueda,
   evidencia débil, columnas incorrectas y normalización.
 
-### MCP conectado a la aplicación
+### MCP conectado a la aplicación (histórico; retirado el 2026-09-18)
 
 - Se añadió `import_curated_providers` a `mcp-server/src/index.ts`.
 - El tool recibe JSON estructurado, valida el lote completo, opera en dry-run por
@@ -334,6 +337,9 @@ Claude Web, no del endpoint MCP desplegado.
 
 ## 10. Agente Gemini dentro del panel — 2026-09-17
 
+El MCP descrito en las secciones históricas fue retirado posteriormente. Gemini
+es ahora el único flujo activo de curaduría.
+
 Se integró Gemini directamente en `/proveedores`, sin depender de n8n ni de
 Claude Web:
 
@@ -376,7 +382,7 @@ La batería se ejecutó sin importar registros ni enviar correos:
 
 - `npm run build` en la aplicación: ✅ 0 errores, 0 warnings y 21 hints de Astro.
 - `node --experimental-strip-types scripts/curation.test.ts`: ✅ tests del parser y validador.
-- `npm --prefix .\\mcp-server run check`: ✅ build, handshake MCP, herramientas y guardas de `DATABASE_URL`.
+- `npm --prefix .\\mcp-server run check`: ✅ build, handshake MCP, herramientas y guardas de `DATABASE_URL` (validación histórica, antes del retiro).
 - `git diff --check`: ✅ sin errores; el repositorio quedó limpio después de retirar los scripts temporales.
 - `/api/health`: ✅ 10/10 respuestas HTTP 200; promedio 262.73 ms, mediana 240.03 ms,
   mínimo 230.32 ms y máximo 434.40 ms.
@@ -394,6 +400,21 @@ no representan todavía rendimiento estadístico de PostgreSQL, importaciones
 confirmadas o calidad sostenida de Gemini. Para una siguiente iteración conviene
 añadir pruebas con `fetch` simulado y registrar los motivos individuales de las
 filas rechazadas en la vista previa.
+
+## 12. Retiro del MCP — 2026-09-18
+
+Como la curaduría se cambió a Gemini, se eliminó la superficie MCP de producción
+y del cliente local:
+
+- Se eliminaron `mcp-server/`, `docs/claude-mcp.md`, `deploy/mcp-stdio.sh` y
+  `deploy/mcp-client-config.example.json`.
+- Caddy deja de publicar `/mcp`, OAuth y los metadatos MCP.
+- El siguiente deploy detendrá y eliminará la unidad systemd,
+  `/usr/local/bin/marketplace-control-mcp` y su regla sudoers histórica.
+- Se retiró `marketplace-control` de la configuración de usuario de Claude y se
+  borró el wrapper SSH efímero local.
+- La aplicación web, PostgreSQL, `/api/ai/curation`, Gemini y la clave de
+  administración permanecen intactos.
 
 ## 9. Historial de commits relevantes
 
