@@ -324,6 +324,14 @@ envía campañas: la única escritura disponible es la importación curada con
 confirmación explícita, y los contactos nuevos permanecen con consentimiento
 `unknown`.
 
+La prueba final dentro de Claude Web queda pendiente de una acción del
+administrador de la organización: la sesión conectada muestra el rol `Usuario`
+y no presenta el botón `Agregar conector personalizado`. En planes Team o
+Enterprise, el propietario/administrador debe agregar la URL
+`https://54-167-34-107.sslip.io/mcp` desde Settings > Connectors; después cada
+usuario puede conectarlo y autorizarlo. Esta limitación es de permisos de
+Claude Web, no del endpoint MCP desplegado.
+
 Para la limpieza hay que elegir explícitamente:
 
 - borrar todos los registros conservando base, tablas y esquema; o
