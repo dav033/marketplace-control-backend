@@ -332,6 +332,37 @@ Enterprise, el propietario/administrador debe agregar la URL
 usuario puede conectarlo y autorizarlo. Esta limitación es de permisos de
 Claude Web, no del endpoint MCP desplegado.
 
+## 10. Agente Gemini dentro del panel — 2026-09-17
+
+Se integró Gemini directamente en `/proveedores`, sin depender de n8n ni de
+Claude Web:
+
+- El panel ahora muestra el bloque “Gemini · agente de curaduría”. Recibe ciudad,
+  categoría e instrucciones opcionales.
+- El servidor llama a la Interactions API con `google_search` y `url_context`,
+  pide un TSV de curaduría y lo pasa por el mismo validador estricto de 18
+  columnas antes de mostrarlo.
+- El botón “Confirmar e importar” requiere confirmación explícita. Los aceptados
+  quedan como `candidate`; no se envían correos ni se conceden permisos de
+  marketing.
+- La llave se tomó del contenedor activo `demo-decoracion-ai-api` en
+  `n8n-maros` y se instaló fuera del repositorio en
+  `/etc/marketplace-control/gemini.env` con permisos `0600`. No se imprimió ni
+  se guardó su valor en Git, el navegador o los logs.
+- `marketplace-control.service` carga ese archivo opcional y usa
+  `GEMINI_AGENT_MODEL=gemini-3.8-flash`.
+- El servicio n8n no estaba activo en `n8n-maros` y el hostname
+  `n8n.marosconstruction.com` no terminaba TLS correctamente; por eso la
+  integración quedó hecha de forma directa en la aplicación. La llave existente
+  sí fue reutilizada sin modificar ese host.
+- Despliegue verificado en GitHub Actions: release `61764af` (run 16).
+  La prueba real del endpoint respondió HTTP 200 y confirmó que la aplicación
+  llega a Gemini; la vista previa no escribe en la base hasta la confirmación
+  del operador.
+
+Archivos principales: `src/lib/gemini.ts`, `src/pages/api/ai/curation.ts`,
+`src/lib/provider-import.ts` y `src/pages/proveedores/index.astro`.
+
 Para la limpieza hay que elegir explícitamente:
 
 - borrar todos los registros conservando base, tablas y esquema; o
@@ -349,6 +380,10 @@ c3b3f11  fix: read protected runtime env with sudo
 54c80ef  feat: polish control panel interface
 78488c2  feat: configure remote MCP over SSH
 09cb594  feat: connect local app to production database tunnel
+687974a  feat: add Gemini curation agent to provider panel
+fab9330  fix: simplify Gemini structured curation schema
+8e6d872  fix: relax Gemini response schema for tool calls
+61764af  fix: return simple TSV payload from Gemini
 ```
 
 El siguiente push a `main` vuelve a activar el workflow de despliegue.
