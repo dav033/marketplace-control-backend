@@ -1,9 +1,13 @@
 import { defineMiddleware } from 'astro:middleware';
 
 const publicPrefixes = ['/registro', '/t/', '/api/public', '/api/health'];
+const retiredMcpPrefixes = ['/mcp', '/oauth', '/.well-known/oauth-'];
 
 export const onRequest = defineMiddleware(({ request }, next) => {
   const pathname = new URL(request.url).pathname;
+  if (retiredMcpPrefixes.some((prefix) => pathname.startsWith(prefix))) {
+    return new Response('Not Found', { status: 404 });
+  }
   const accessKey = import.meta.env.ADMIN_ACCESS_KEY ?? process.env.ADMIN_ACCESS_KEY;
 
   if (publicPrefixes.some((prefix) => pathname.startsWith(prefix))) return next();
