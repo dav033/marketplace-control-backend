@@ -9,15 +9,18 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "start:http": "MCP_TRANSPORT=http node dist/http.js",
     "smoke": "node scripts/smoke.mjs",
     "check": "npm run build && npm run smoke"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "express": "^5.2.1",
     "pg": "^8.23.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/express": "^5.0.5",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.15.0",
     "typescript": "^5.9.3"

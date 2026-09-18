@@ -303,6 +303,27 @@ con `claude mcp list`:
 La plantilla con clave permanente sigue disponible como alternativa en
 `deploy/mcp-client-config.example.json`, pero no fue necesaria para esta conexión.
 
+### Conector Claude Web por HTTPS
+
+Se añadió un segundo transporte para cumplir el criterio de conexión desde
+Claude Web, que no puede ejecutar un MCP local `stdio`:
+
+- `mcp-server/src/http.ts` expone Streamable HTTP en `/mcp`.
+- `marketplace-control-mcp.service` escucha solo en `127.0.0.1:4322`.
+- Caddy enruta `/mcp`, `/.well-known/*` y `/oauth/*` al servicio MCP, y el resto
+  del sitio al panel Astro.
+- OAuth/PKCE incluye registro dinámico de cliente, autorización con
+  `ADMIN_ACCESS_KEY`, refresh tokens y metadatos RFC 9728/8414.
+- URL de prueba para Claude Web: `https://54-167-34-107.sslip.io/mcp`.
+- URL de producción prevista: `https://marketplace.sempertex.com/mcp`, después de
+  crear el registro DNS A correspondiente.
+
+La URL `sslip.io` depende del IP público actual de EC2; para producción se debe
+asociar una Elastic IP o configurar el dominio corporativo. El MCP remoto no
+envía campañas: la única escritura disponible es la importación curada con
+confirmación explícita, y los contactos nuevos permanecen con consentimiento
+`unknown`.
+
 Para la limpieza hay que elegir explícitamente:
 
 - borrar todos los registros conservando base, tablas y esquema; o

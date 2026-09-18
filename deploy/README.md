@@ -2,9 +2,21 @@
 
 Push a `main` ejecuta `.github/workflows/deploy.yml`. El workflow empaqueta solo el commit, lo sube por SSH, ejecuta `npm ci` y `npm run build` en EC2, actualiza un symlink `current`, reinicia systemd y recarga Caddy.
 
-## MCP remoto por SSH
+## MCP remoto para Claude Web y respaldo SSH
 
-El MCP usa transporte `stdio`. En cada deploy se instala y compila en
+El servicio `marketplace-control-mcp.service` publica el MCP por Streamable HTTP
+en `127.0.0.1:4322`. Caddy lo expone por HTTPS en `/mcp` y los endpoints OAuth
+en `/.well-known/*` y `/oauth/*`. Claude Web se conecta con:
+
+```text
+https://54-167-34-107.sslip.io/mcp
+```
+
+La conexión exige OAuth/PKCE y la clave administrativa se introduce solo en la
+página de autorización. El fallback de compañía es
+`https://marketplace.sempertex.com/mcp`, cuando el DNS esté configurado.
+
+El MCP también conserva el transporte `stdio`. En cada deploy se instala y compila en
 `current/mcp-server`, y queda disponible mediante el puente root-only
 `/usr/local/bin/marketplace-control-mcp`. El cliente MCP local debe ejecutar
 SSH con la clave privada y el usuario de despliegue; usar como plantilla
@@ -61,7 +73,10 @@ Crear un registro `A`:
 marketplace.sempertex.com -> IP pública o Elastic IP de EC2
 ```
 
-Abrir TCP `80` y `443` en el security group. `deploy/Caddyfile` hace proxy a `127.0.0.1:4321`; Caddy solicita y renueva automáticamente el certificado Let's Encrypt cuando DNS ya resuelve y los puertos son accesibles.
+Abrir TCP `80` y `443` en el security group. `deploy/Caddyfile` hace proxy a
+`127.0.0.1:4321` y al MCP en `127.0.0.1:4322`; Caddy solicita y renueva
+automáticamente los certificados Let's Encrypt cuando DNS ya resuelve y los
+puertos son accesibles.
 
 ## GitHub Secrets
 

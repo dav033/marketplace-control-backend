@@ -1,4 +1,30 @@
-# Conectar el marketplace a Claude por MCP/SSH
+# Conectar el marketplace a Claude por MCP
+
+El proyecto ofrece dos conexiones distintas:
+
+- Claude Web: MCP remoto por HTTPS en `https://54-167-34-107.sslip.io/mcp`,
+  con OAuth/PKCE y autorización mediante la clave administrativa introducida
+  en la pantalla del servidor.
+- Claude Code/Desktop: MCP local por `stdio` sobre SSH, útil como respaldo y
+  para trabajar sin publicar el MCP.
+
+## Claude Web (criterio de aceptación)
+
+En Claude Web, abre Settings > Connectors > Add custom connector y agrega:
+
+```text
+https://54-167-34-107.sslip.io/mcp
+```
+
+Claude debe descubrir automáticamente los metadatos OAuth. Pulsa Connect,
+autoriza el cliente y escribe la `ADMIN_ACCESS_KEY` en la pantalla de
+Marketplace Control. Después habilita las herramientas desde Search and tools
+y prueba `pipeline_stats` o `search_providers`.
+
+El hostname `sslip.io` apunta al IP público actual de EC2. El hostname de
+producción previsto es `https://marketplace.sempertex.com/mcp`, una vez que el
+registro DNS A apunte a EC2. No pegues la clave administrativa en Claude ni en
+el repositorio.
 
 Esta primera versión usa MCP sobre `stdio`. Claude ejecuta `ssh` localmente y
 ese proceso mantiene stdin/stdout conectado al servidor MCP en EC2:

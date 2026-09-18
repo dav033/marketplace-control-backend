@@ -24,6 +24,7 @@ unit_file="/etc/systemd/system/marketplace-control.service"
 caddy_file="/etc/caddy/Caddyfile"
 mcp_wrapper="/usr/local/bin/marketplace-control-mcp"
 mcp_sudoers="/etc/sudoers.d/marketplace-control-mcp"
+mcp_unit_file="/etc/systemd/system/marketplace-control-mcp.service"
 
 [[ "$deploy_path" == /* && "$deploy_path" != '/' && "$deploy_path" != *'..'* ]] || fail 'DEPLOY_PATH inválido'
 [[ "$deploy_path" =~ ^/[A-Za-z0-9._/-]+$ ]] || fail 'DEPLOY_PATH contiene caracteres no permitidos'
@@ -108,6 +109,31 @@ ReadWritePaths=$deploy_path
 WantedBy=multi-user.target
 UNIT
 
+sudo tee "$mcp_unit_file" >/dev/null <<UNIT
+[Unit]
+Description=Marketplace Control MCP HTTP
+After=network-online.target marketplace-control.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$app_user
+WorkingDirectory=$deploy_path/current/mcp-server
+EnvironmentFile=$env_file
+Environment=MCP_TRANSPORT=http
+ExecStart=$node_bin $deploy_path/current/mcp-server/dist/http.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=full
+ReadWritePaths=$deploy_path
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 caddy validate --config "$release_dir/deploy/Caddyfile" --adapter caddyfile >/dev/null
 if ! id caddy >/dev/null 2>&1; then
   sudo useradd --system --home-dir /var/lib/caddy --create-home --shell /sbin/nologin caddy
@@ -133,6 +159,11 @@ if ! sudo systemctl restart marketplace-control.service || ! sudo systemctl is-a
     sudo systemctl restart marketplace-control.service || true
   fi
   fail 'el servicio Astro no quedó activo; se intentó rollback'
+fi
+
+sudo systemctl enable marketplace-control-mcp.service >/dev/null
+if ! sudo systemctl restart marketplace-control-mcp.service || ! sudo systemctl is-active --quiet marketplace-control-mcp.service; then
+  fail 'el servicio MCP HTTP no quedó activo'
 fi
 
 sudo systemctl enable --now caddy.service >/dev/null

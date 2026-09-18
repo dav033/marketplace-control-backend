@@ -377,10 +377,11 @@ function serializeProvider(row: ProviderRow) {
   };
 }
 
-const server = new McpServer({
-  name: "marketplace-control",
-  version: "0.1.0",
-});
+export function createServer() {
+  const server = new McpServer({
+    name: "marketplace-control",
+    version: "0.1.0",
+  });
 
 server.registerTool(
   "search_providers",
@@ -820,13 +821,18 @@ server.registerTool(
   },
 );
 
+  return server;
+}
+
+const server = createServer();
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("marketplace-control MCP listo en stdio");
 }
 
-async function closePool() {
+export async function closePool() {
   if (pool) await pool.end();
 }
 
@@ -837,7 +843,9 @@ process.once("SIGTERM", () => {
   void closePool().finally(() => process.exit(0));
 });
 
-main().catch(() => {
-  console.error("marketplace-control MCP no pudo iniciar.");
-  process.exitCode = 1;
-});
+if (process.env.MCP_TRANSPORT !== "http") {
+  main().catch(() => {
+    console.error("marketplace-control MCP no pudo iniciar.");
+    process.exitCode = 1;
+  });
+}

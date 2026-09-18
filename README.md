@@ -40,14 +40,14 @@ Primer lote importado desde `C:\Users\davidt\Downloads\omnisend-playground\leads
 - `/registro/:token`: formulario público con consentimiento separado.
 - `/formularios`: bandeja de respuestas para revisión humana.
 - `/campanas`: composición y envío SES con confirmación explícita; solo se muestran contactos con consentimiento de marketing concedido y sin supresión.
-- MCP: `import_curated_providers` importa lotes curados por Claude en modo dry-run y, con `confirm=true`, los deja como candidatos sin enviar correos. La conexión SSH/stdio está documentada en [`docs/claude-mcp.md`](docs/claude-mcp.md).
+- MCP: `import_curated_providers` importa lotes curados por Claude en modo dry-run y, con `confirm=true`, los deja como candidatos sin enviar correos. Claude Web se conecta por HTTPS/OAuth en `https://54-167-34-107.sslip.io/mcp`; Claude Code conserva el respaldo SSH/stdio. Ambos flujos están documentados en [`docs/claude-mcp.md`](docs/claude-mcp.md).
 
 La primera versión no convierte un correo público en permiso de marketing: los contactos descubiertos por curaduría quedan en `unknown`. Solo el formulario público con la casilla de marketing marcada los vuelve elegibles para una campaña.
 
 ## Seguridad pendiente antes de producción
 
 - Configurar `ADMIN_ACCESS_KEY` y terminar autenticación por roles/sesiones.
-- Servir detrás de HTTPS y definir `APP_URL` real.
+- Cambiar el fallback `sslip.io` por `marketplace.sempertex.com` cuando el DNS real apunte a una Elastic IP estable.
 - Conectar SES solo desde el servidor; nunca desde el navegador.
 - Configurar rebotes, quejas, bajas y lista de supresión.
 - Eliminar la regla antigua del Security Group cuando ya no sea necesaria; durante esta sesión se añadió `204.199.82.34/32` a 22 y 5432 para acceso temporal.

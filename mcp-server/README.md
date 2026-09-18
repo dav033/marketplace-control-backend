@@ -1,9 +1,9 @@
 # Marketplace Control MCP Server
 
-Mini-servidor MCP en TypeScript/Node con transporte `stdio` para consultar el
-pipeline de proveedores y, de forma explícita, importar lotes curados desde
-Claude. El servidor no expone un puerto HTTP y no tiene herramientas para
-enviar correo.
+Mini-servidor MCP en TypeScript/Node con dos transportes: `stdio` para Claude
+Code/Desktop mediante SSH y Streamable HTTP para Claude Web mediante HTTPS y
+OAuth/PKCE. Permite consultar el pipeline de proveedores y, de forma explícita,
+importar lotes curados desde Claude. No tiene herramientas para enviar correo.
 
 ## Herramientas
 
@@ -99,6 +99,25 @@ reservado para JSON-RPC MCP y los diagnósticos van a stderr.
 Usa la plantilla sin secretos en
 `deploy/mcp-client-config.example.json`. La guía paso a paso para Claude
 Desktop y Claude Code está en [docs/claude-mcp.md](../docs/claude-mcp.md).
+
+## Transporte remoto para Claude Web
+
+`src/http.ts` publica `/mcp` detrás de Caddy. El servidor exige OAuth con PKCE:
+Claude registra un cliente dinámico, abre la pantalla de autorización y el
+usuario introduce la `ADMIN_ACCESS_KEY` directamente en esa pantalla. La clave
+nunca se envía a Claude ni se imprime en logs.
+
+En producción el servicio escucha solo en `127.0.0.1:4322`; Caddy expone la
+ruta por HTTPS. La URL del conector es:
+
+```text
+https://54-167-34-107.sslip.io/mcp
+```
+
+En Claude Web: Settings > Connectors > Add custom connector, pega esa URL y
+completa la autorización. Cuando DNS de `marketplace.sempertex.com` esté
+configurado, se debe usar `https://marketplace.sempertex.com/mcp` y retirar el
+fallback `sslip.io` del `Caddyfile`.
 
 ## Verificación
 
