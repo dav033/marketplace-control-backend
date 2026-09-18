@@ -20,16 +20,16 @@ const rowSchema = {
   properties: {
     id: { type: 'string', description: 'ID único en formato ABC-CC-###.' },
     display_name: { type: 'string' },
-    category: { type: 'string', enum: [...categories] },
-    segment: { type: 'string', enum: ['Bajo Costo', 'Premium', 'Sin clasificar'] },
+    category: { type: 'string', description: `Una de: ${categories.join(', ')}.` },
+    segment: { type: 'string' },
     city: { type: 'string' },
-    zone: { type: 'string', enum: ['Zona Norte / Comercial Alta', 'Zona Centro / Tradicional', 'Zona Sur / Occidente Comercial', 'Zona Campestre / Periferia', 'Área Metropolitana', 'Cobertura Nacional', 'Sin dato'] },
-    scale: { type: 'string', enum: ['Pequeño (Hasta 50 pers.)', 'Mediano (50 a 200 pers.)', 'Masivo (Más de 200 pers.)', 'Sin dato'] },
-    formality: { type: 'string', enum: ['Formalizado (NIT - Empresa)', 'Independiente (RUT - Persona Natural)', 'No verificado'] },
-    rating: { type: 'number', minimum: 4.5, maximum: 5 },
-    review_count: { type: 'integer', minimum: 15 },
-    reputation_platform: { type: 'string', enum: ['Google', 'Matrimonios.com.co', 'Bodas.com.co', 'TripAdvisor', 'Booking', 'Facebook', 'Rappi', 'DiDi'] },
-    curation_level: { type: 'string', enum: ['A', 'B'] },
+    zone: { type: 'string' },
+    scale: { type: 'string' },
+    formality: { type: 'string' },
+    rating: { type: 'string', description: 'Número entre 4.5 y 5.0 con un decimal.' },
+    review_count: { type: 'string', description: 'Número entero de reseñas.' },
+    reputation_platform: { type: 'string' },
+    curation_level: { type: 'string' },
     curation_reason: { type: 'string', description: 'Debe incluir calificación, reseñas, plataforma, evidencia de eventos y actividad reciente.' },
     phone: { type: 'string' },
     instagram: { type: 'string' },
@@ -58,8 +58,8 @@ type GeminiRow = {
   zone: string;
   scale: string;
   formality: string;
-  rating: number;
-  review_count: number;
+  rating: string | number;
+  review_count: string | number;
   reputation_platform: string;
   curation_level: string;
   curation_reason: string;
