@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro check && astro build",
-    "preview": "astro preview"
+    "preview": "astro preview",
+    "test": "npm run test:unit && npm run test:runner",
+    "test:unit": "node --experimental-strip-types --import ./scripts/ts-resolver.mjs scripts/curation.test.ts && node --experimental-strip-types --import ./scripts/ts-resolver.mjs scripts/curation-counts.test.ts",
+    "test:runner": "node --experimental-strip-types --import ./scripts/ts-resolver.mjs scripts/curation-runner.test.ts",
+    "curation:smoke": "node --env-file=.env --experimental-strip-types --import ./scripts/ts-resolver.mjs scripts/curation-smoke.ts",
+    "curation:release-blacklist": "node --env-file=.env --experimental-strip-types --import ./scripts/ts-resolver.mjs scripts/release-curation-blacklist.ts"
   },
   "dependencies": {
     "@astrojs/node": "latest",

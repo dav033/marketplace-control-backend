@@ -51,3 +51,43 @@ La primera versión no convierte un correo público en permiso de marketing: los
 - Conectar SES solo desde el servidor; nunca desde el navegador.
 - Configurar rebotes, quejas, bajas y lista de supresión.
 - Eliminar la regla antigua del Security Group cuando ya no sea necesaria; durante esta sesión se añadió `204.199.82.34/32` a 22 y 5432 para acceso temporal.
+
+## Curaduría con Claude Code
+
+El agente de curaduría lanza el CLI de Claude Code con `spawn`. Tres detalles del arranque no son
+opcionales y hay pruebas que los protegen:
+
+- `stdio[0]` va en `'ignore'`. Cerrar stdin con `.end()` depende de un turno libre del event loop y,
+  con el servidor ocupado, el CLI alcanza a escribir `Warning: no stdin data received in 3s` en
+  stderr. Ese aviso es informativo: el CLI continúa y termina con código 0.
+- `--strict-mcp-config` evita cargar los servidores MCP de la cuenta. Sin él, cada proceso arranca
+  con 197 herramientas en vez de 30 y tarda ~1.7s más.
+- `--allowedTools` **no restringe nada**: es una lista de auto-aprobación. La restricción real es
+  `--disallowedTools`, que aquí deniega `Task` (para que el agente no cree sus propios subagentes),
+  `Bash`, `Write` y el resto de herramientas locales.
+
+Cuando el CLI se queda sin turnos, el evento `result` llega con `subtype: "error_max_turns"`,
+`is_error: true` y **sin** campo `result`. Ese caso se reporta como `CLAUDE_CODE_MAX_TURNS`; nunca se
+debe atribuir el fallo al contenido de stderr.
+
+Cada ejecución escribe una línea JSON `curation.claude_run` con job, escaneo, PID, comando sin
+secretos, duración, conteo de WebSearch/WebFetch, último evento, código de salida y motivo del fallo.
+
+### Comandos
+
+```bash
+npm test                          # pruebas de validación, conteo y runner (lanza el CLI real)
+npm run test:unit                 # solo las pruebas puras, sin red
+npm run curation:smoke -- "Barranquilla" "Comida y Bebida" 20
+npm run curation:release-blacklist -- "Barranquilla" "Comida y Bebida"          # simulación
+npm run curation:release-blacklist -- "Barranquilla" "Comida y Bebida" --apply  # libera
+```
+
+`SKIP_CLI_TESTS=1` omite las pruebas que lanzan el binario de Claude Code.
+
+### Lista negra
+
+Un candidato rechazado no se vuelve a buscar. La excepción es `not_returned_by_verification`: ese
+motivo describe un fallo del agente, no del negocio, así que solo bloquea dentro de la misma
+ejecución (`run_id`) y se puede reintentar en la siguiente. Al prompt solo viajan nombres; las URLs,
+los códigos y los motivos se quedan en la base de datos y los aplica el servidor.

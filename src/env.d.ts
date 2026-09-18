@@ -5,6 +5,7 @@ interface ImportMetaEnv {
   readonly SESSION_SECRET?: string;
   readonly TRACKING_SECRET?: string;
   readonly ADMIN_ACCESS_KEY?: string;
+  readonly LOCAL_AUTO_LOGIN?: string;
   readonly APP_URL?: string;
   readonly AWS_REGION?: string;
   readonly SES_FROM_EMAIL?: string;
@@ -12,6 +13,14 @@ interface ImportMetaEnv {
   readonly SES_CONFIGURATION_SET?: string;
   readonly GEMINI_API_KEY?: string;
   readonly GEMINI_AGENT_MODEL?: string;
+  readonly CURATION_PROVIDER?: string;
+  readonly CLAUDE_CODE_PATH?: string;
+  readonly CLAUDE_CODE_MODEL?: string;
+  readonly OMNISEND_API_KEY?: string;
+  readonly OMNISEND_VERSION?: string;
+  readonly OMNISEND_SENDER_NAME?: string;
+  readonly QA_TEST_RECIPIENT?: string;
+  readonly QA_TEST_RECIPIENTS?: string;
 }
 
 interface ImportMeta {

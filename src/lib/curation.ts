@@ -31,8 +31,8 @@ export type CurationFields = {
   zone: string;
   scale: string;
   formality: string;
-  rating: number;
-  reviewCount: number;
+  rating: number | null;
+  reviewCount: number | null;
   platform: string;
   curationLevel: 'A' | 'B';
   curationReason: string;
@@ -186,13 +186,15 @@ function valueAt(cells: string[], index: number): string {
   return cleanText(cells[index] ?? '');
 }
 
-function parseRating(value: string): number | undefined {
+function parseRating(value: string): number | null | undefined {
+  if (normalizeKey(value) === 'sin dato') return null;
   if (!/^[0-5][.,]\d$/.test(value)) return undefined;
   const parsed = Number(value.replace(',', '.'));
   return parsed <= 5 ? parsed : undefined;
 }
 
-function parseReviewCount(value: string): number | undefined {
+function parseReviewCount(value: string): number | null | undefined {
+  if (normalizeKey(value) === 'sin dato') return null;
   if (!/^\d+$/.test(value)) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
@@ -228,7 +230,7 @@ function isValidDate(value: string): boolean {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
-function isDirectSourceUrl(value: string): boolean {
+export function isDirectSourceUrl(value: string): boolean {
   if (/\s/.test(value)) return false;
   try {
     const url = new URL(value);
@@ -332,7 +334,7 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
   if (!formality) issues.push(issue(line, 'invalid_formality', 'Formalidad no tiene un valor permitido.'));
   if (rating === undefined) issues.push(issue(line, 'invalid_rating', 'La calificación debe ser una cifra exacta entre 4.5 y 5.0 con un decimal.'));
   if (reviewCount === undefined) issues.push(issue(line, 'invalid_review_count', 'Nº Reseñas debe ser un entero exacto sin separadores.'));
-  if (!platform || normalizeKey(platform) === 'sin dato' || normalizeKey(platform) === 'instagram') issues.push(issue(line, 'invalid_platform', 'La plataforma de reputación es obligatoria y no puede ser Instagram.'));
+  if (!platform || normalizeKey(platform) === 'instagram') issues.push(issue(line, 'invalid_platform', 'La plataforma de reputación no puede ser Instagram.'));
   if (!['A', 'B'].includes(curationLevel)) issues.push(issue(line, 'invalid_curation_level', 'Nivel Curaduría debe ser A o B.'));
   if (!curationReason || normalizeKey(curationReason) === 'sin dato') issues.push(issue(line, 'missing_curation_reason', 'Por qué pasa la Curaduría debe explicar reputación y capacidad para eventos.'));
   if (phone === undefined) issues.push(issue(line, 'invalid_phone', 'Teléfono debe ser un único número colombiano normalizado o Sin dato.'));
@@ -365,15 +367,26 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
     const providerType = inferProviderType(normalizedFields);
     const contactChannel = inferContactChannel(normalizedFields);
     const minimumReviews = providerType === 1 ? 50 : 15;
-    const expectedLevel = reviewCount >= 50 ? 'A' : 'B';
-    if (reviewCount < minimumReviews) issues.push(issue(line, 'insufficient_reviews', `Tipo ${providerType} requiere al menos ${minimumReviews} reseñas exactas.`));
-    if (curationLevel !== expectedLevel || (curationLevel === 'B' && providerType !== 2)) issues.push(issue(line, 'invalid_curation_level_for_threshold', `Nivel ${expectedLevel} no coincide con el volumen o el Tipo ${providerType}.`));
-    if (rating < 4.5) issues.push(issue(line, 'low_rating', 'La calificación mínima de curaduría es 4.5.'));
+    const expectedLevel = reviewCount !== null && reviewCount >= 50 ? 'A' : 'B';
+    if (reviewCount !== null && reviewCount < minimumReviews) issues.push(issue(line, 'insufficient_reviews', `Tipo ${providerType} requiere al menos ${minimumReviews} reseñas exactas.`));
+    if (curationLevel !== expectedLevel) issues.push(issue(line, 'invalid_curation_level_for_threshold', `Nivel ${expectedLevel} no coincide con el volumen de reseñas.`));
+    // El Nivel B reservado al Tipo 2 solo tiene sentido cuando sí conocemos el número de reseñas.
+    else if (reviewCount !== null && curationLevel === 'B' && providerType !== 2) issues.push(issue(line, 'invalid_curation_level_for_threshold', `Nivel B no aplica al Tipo ${providerType}.`));
+    // Prospecto real pero sin reputación pública confirmada: se conserva y se marca para revisión
+    // manual en vez de rechazarse con un motivo de formato que no corresponde.
+    else if (rating === null || reviewCount === null) issues.push(issue(line, 'pending_reputation_review', 'Requiere revisión: el negocio y su contacto están confirmados, pero la calificación o las reseñas no pudieron verificarse.'));
+    if (rating !== null && rating < 4.5) issues.push(issue(line, 'low_rating', 'La calificación mínima de curaduría es 4.5.'));
     const reasonKey = normalizeKey(curationReason);
-    const reasonHasRating = curationReason.replace(',', '.').includes(rating.toFixed(1));
-    const reasonHasReviews = new RegExp(`(?:^|\\D)${reviewCount}(?:\\D|$)`).test(curationReason.replace(/[.,]/g, ' '));
-    const reasonHasPlatform = reasonKey.includes(normalizeKey(platform));
+    // La justificación solo debe repetir los datos que EXISTEN. Un prospecto sin reputación pública
+    // usa "Sin dato" de forma legítima; exigirle calificación y reseñas lo rechazaba siempre.
+    const reasonHasRating = rating === null || curationReason.replace(',', '.').includes(rating.toFixed(1));
+    const reasonHasReviews = reviewCount === null || new RegExp(`(?:^|\\D)${reviewCount}(?:\\D|$)`).test(curationReason.replace(/[.,]/g, ' '));
+    const reasonHasPlatform = normalizeKey(platform) === 'sin dato' || reasonKey.includes(normalizeKey(platform));
     if (!reasonHasRating || !reasonHasReviews || !reasonHasPlatform) issues.push(issue(line, 'invalid_curation_reason', 'La justificación debe conservar calificación, reseñas y plataforma de la evidencia.'));
+    // Un prospecto sin reputación confirmada debe declararlo explícitamente en la justificación.
+    if ((rating === null || reviewCount === null) && !/(sin dato|no se pudo|requiere revisi|no est[áa] public|sin rese|falta)/i.test(curationReason)) {
+      issues.push(issue(line, 'missing_review_disclosure', 'Cuando la calificación o las reseñas son "Sin dato", la justificación debe decir explícitamente qué falta por confirmar.'));
+    }
     if (contactChannel === 'email' && normalizeKey(email) === 'sin dato') issues.push(issue(line, 'missing_email_contact', 'Las empresas clasificadas para correo deben tener un correo corporativo verificable.'));
     if (contactChannel === 'whatsapp' && !hasWhatsappPhone(normalizedFields)) issues.push(issue(line, 'missing_whatsapp_contact', 'Las empresas clasificadas para WhatsApp deben tener un número móvil colombiano verificable.'));
 
@@ -425,16 +438,27 @@ export function validateCurationBatch(parsed: ParsedCurationBatch): CurationBatc
   const sourceUrls = new Set<string>();
 
   for (const row of parsed.rows) {
-    if (row.issues.length > 0 || !row.fields || !row.providerType) continue;
-    const fields = row.fields;
-    const providerType = row.providerType;
-    const dedupeKey = `${normalizeKey(fields.displayName)}|${normalizeKey(fields.city)}|${normalizeKey(fields.category)}`;
-    const sourceKey = fields.sourceUrl.toLowerCase();
-    if (providerKeys.has(dedupeKey)) {
-      row.issues.push(issue(row.line, 'duplicate_provider', 'El proveedor ya aparece en este lote.'));
-      rejected.push(row);
+    // El duplicado se detecta ANTES de mirar el resto de problemas: una fila marcada para revisión
+    // sigue ocupando un lugar en el lote, y si no se marca aquí el mismo negocio se cuenta dos veces.
+    const nameKey = normalizeKey(row.fields?.displayName ?? cleanText(row.rawCells[1] ?? ''));
+    const cityKey = normalizeKey(row.fields?.city ?? cleanText(row.rawCells[4] ?? ''));
+    const categoryKey = normalizeKey(row.fields?.category ?? cleanText(row.rawCells[2] ?? ''));
+    const rowDedupeKey = `${nameKey}|${cityKey}|${categoryKey}`;
+    if (nameKey && providerKeys.has(rowDedupeKey)) {
+      if (!row.issues.some(item => item.code === 'duplicate_provider')) {
+        row.issues.push(issue(row.line, 'duplicate_provider', 'El proveedor ya aparece en este lote.'));
+        if (!rejected.includes(row)) rejected.push(row);
+      }
       continue;
     }
+    if (row.issues.length > 0 || !row.fields || !row.providerType) {
+      if (nameKey) providerKeys.add(rowDedupeKey);
+      continue;
+    }
+    const fields = row.fields;
+    const providerType = row.providerType;
+    const dedupeKey = rowDedupeKey;
+    const sourceKey = fields.sourceUrl.toLowerCase();
     if (sourceUrls.has(sourceKey)) {
       row.issues.push(issue(row.line, 'duplicate_source', 'La Fuente URL ya aparece en este lote.'));
       rejected.push(row);

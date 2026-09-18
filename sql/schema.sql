@@ -120,6 +120,25 @@ CREATE TABLE IF NOT EXISTS marketplace.campaign_sends (
   UNIQUE (campaign_id, contact_id)
 );
 
+CREATE TABLE IF NOT EXISTS marketplace.campaign_personalizations (
+  personalization_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  campaign_id uuid NOT NULL REFERENCES marketplace.campaigns(campaign_id) ON DELETE CASCADE,
+  contact_id uuid NOT NULL REFERENCES marketplace.contacts(contact_id) ON DELETE CASCADE,
+  provider_id uuid REFERENCES marketplace.providers(provider_id) ON DELETE SET NULL,
+  subject text NOT NULL,
+  body_text text NOT NULL,
+  ai_model text NOT NULL,
+  ai_confidence numeric(4,3),
+  facts_used jsonb NOT NULL DEFAULT '[]'::jsonb,
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','synced','sent','failed','rejected')),
+  omnisend_contact_id text,
+  error_message text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (campaign_id, contact_id),
+  CHECK (ai_confidence IS NULL OR ai_confidence BETWEEN 0 AND 1)
+);
+
 CREATE TABLE IF NOT EXISTS marketplace.email_clicks (
   click_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   send_id uuid NOT NULL REFERENCES marketplace.campaign_sends(send_id) ON DELETE CASCADE,
@@ -171,6 +190,39 @@ CREATE TABLE IF NOT EXISTS marketplace.audit_log (
   occurred_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS marketplace.curation_scans (
+  scan_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  city text NOT NULL,
+  category text NOT NULL,
+  instructions text,
+  provider text NOT NULL,
+  model text NOT NULL,
+  status text NOT NULL DEFAULT 'completed' CHECK (status IN ('completed','failed')),
+  research_summary text,
+  discovered_count integer NOT NULL DEFAULT 0,
+  accepted_count integer NOT NULL DEFAULT 0,
+  rejected_count integer NOT NULL DEFAULT 0,
+  contactable_count integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS marketplace.curation_candidates (
+  scan_candidate_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  scan_id uuid NOT NULL REFERENCES marketplace.curation_scans(scan_id) ON DELETE CASCADE,
+  candidate_key text NOT NULL,
+  display_name text NOT NULL,
+  category text NOT NULL,
+  city text NOT NULL,
+  source_url text,
+  status text NOT NULL CHECK (status IN ('accepted','rejected')),
+  reason_codes jsonb NOT NULL DEFAULT '[]'::jsonb,
+  reasons jsonb NOT NULL DEFAULT '[]'::jsonb,
+  raw_tsv text NOT NULL DEFAULT '',
+  raw_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (scan_id, candidate_key)
+);
+
 -- Compatibilidad con instalaciones MVP creadas antes de este esquema completo.
 ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS legal_name text;
 ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS latitude numeric(9,6);
@@ -185,9 +237,12 @@ CREATE INDEX IF NOT EXISTS ix_contacts_consent ON marketplace.contacts (consent_
 CREATE INDEX IF NOT EXISTS ix_campaigns_status_schedule ON marketplace.campaigns (status, scheduled_at);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_campaign_sends_ses_message ON marketplace.campaign_sends (ses_message_id) WHERE ses_message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_campaign_sends_campaign_status ON marketplace.campaign_sends (campaign_id, status);
+CREATE INDEX IF NOT EXISTS ix_campaign_personalizations_status ON marketplace.campaign_personalizations (campaign_id, status);
 CREATE INDEX IF NOT EXISTS ix_email_clicks_send_time ON marketplace.email_clicks (send_id, clicked_at DESC);
 CREATE INDEX IF NOT EXISTS ix_registration_status_time ON marketplace.registration_submissions (submission_status, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_registration_email ON marketplace.registration_submissions (lower(email));
+CREATE INDEX IF NOT EXISTS ix_curation_scans_city_category ON marketplace.curation_scans (lower(city), lower(category), created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_curation_candidates_blacklist ON marketplace.curation_candidates (lower(city), lower(category), candidate_key);
 
 CREATE OR REPLACE FUNCTION marketplace.touch_updated_at()
 RETURNS trigger LANGUAGE plpgsql AS $$

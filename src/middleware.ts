@@ -9,8 +9,11 @@ export const onRequest = defineMiddleware(({ request }, next) => {
     return new Response('Not Found', { status: 404 });
   }
   const accessKey = import.meta.env.ADMIN_ACCESS_KEY ?? process.env.ADMIN_ACCESS_KEY;
+  const localAutoLogin = import.meta.env.DEV
+    && (import.meta.env.LOCAL_AUTO_LOGIN ?? process.env.LOCAL_AUTO_LOGIN) === 'true';
 
   if (publicPrefixes.some((prefix) => pathname.startsWith(prefix))) return next();
+  if (localAutoLogin) return next();
   if (!accessKey) return new Response('Administración no configurada', { status: 503 });
 
   const authorization = request.headers.get('authorization');
