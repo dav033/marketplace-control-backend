@@ -10,6 +10,8 @@ interface ImportMetaEnv {
   readonly SES_FROM_EMAIL?: string;
   readonly SES_REPLY_TO_EMAIL?: string;
   readonly SES_CONFIGURATION_SET?: string;
+  readonly GEMINI_API_KEY?: string;
+  readonly GEMINI_AGENT_MODEL?: string;
 }
 
 interface ImportMeta {

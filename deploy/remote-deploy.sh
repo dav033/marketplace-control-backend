@@ -95,6 +95,7 @@ Type=simple
 User=$app_user
 WorkingDirectory=$deploy_path/current
 EnvironmentFile=$env_file
+EnvironmentFile=-/etc/marketplace-control/gemini.env
 Environment=NODE_ENV=production
 ExecStart=$node_bin $deploy_path/current/dist/server/entry.mjs
 Restart=on-failure
