@@ -370,6 +370,31 @@ Para la limpieza hay que elegir explícitamente:
 
 No ejecutar ninguna de las dos opciones sin confirmación exacta y, preferiblemente, un backup previo.
 
+## 11. Pruebas y benchmarks — 2026-09-17
+
+La batería se ejecutó sin importar registros ni enviar correos:
+
+- `npm run build` en la aplicación: ✅ 0 errores, 0 warnings y 21 hints de Astro.
+- `node --experimental-strip-types scripts/curation.test.ts`: ✅ tests del parser y validador.
+- `npm --prefix .\\mcp-server run check`: ✅ build, handshake MCP, herramientas y guardas de `DATABASE_URL`.
+- `git diff --check`: ✅ sin errores; el repositorio quedó limpio después de retirar los scripts temporales.
+- `/api/health`: ✅ 10/10 respuestas HTTP 200; promedio 262.73 ms, mediana 240.03 ms,
+  mínimo 230.32 ms y máximo 434.40 ms.
+- Parser/validador local con 30 iteraciones por lote y filas sintéticas válidas:
+  1 fila = 0.153 ms promedio; 10 = 0.570 ms; 50 = 2.515 ms; 100 = 4.968 ms;
+  500 = 23.450 ms (~21,322 filas/s). Todas las filas fueron aceptadas.
+- Gemini e2e en la EC2: primera corrida HTTP 502 en 56.565 s; reintento HTTP 200
+  en 66.231 s con 0 aceptados y 7 rechazados. La llamada sí llegó a Gemini,
+  pero las filas no cumplieron el contrato estricto local; no se realizó ninguna
+  escritura. El 502 se clasifica como fallo transitorio de disponibilidad, no
+  como regresión confirmada.
+
+Estos benchmarks miden el parser en CPU local y una muestra pequeña del endpoint;
+no representan todavía rendimiento estadístico de PostgreSQL, importaciones
+confirmadas o calidad sostenida de Gemini. Para una siguiente iteración conviene
+añadir pruebas con `fetch` simulado y registrar los motivos individuales de las
+filas rechazadas en la vista previa.
+
 ## 9. Historial de commits relevantes
 
 ```text
