@@ -6,6 +6,10 @@ interface ImportMetaEnv {
   readonly TRACKING_SECRET?: string;
   readonly ADMIN_ACCESS_KEY?: string;
   readonly APP_URL?: string;
+  readonly AWS_REGION?: string;
+  readonly SES_FROM_EMAIL?: string;
+  readonly SES_REPLY_TO_EMAIL?: string;
+  readonly SES_CONFIGURATION_SET?: string;
 }
 
 interface ImportMeta {

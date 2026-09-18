@@ -34,12 +34,15 @@ Primer lote importado desde `C:\Users\davidt\Downloads\omnisend-playground\leads
 
 ## Flujos MVP
 
-- `/proveedores`: candidatos, búsqueda, estados e importación futura del TSV v2.8.
+- `/proveedores`: candidatos, búsqueda, estados e importación estricta del TSV de 18 columnas de curaduría.
 - `/proveedores/:id`: evidencia y siguiente acción.
 - `/t/:token`: registra clic con token opaco y envía al formulario.
 - `/registro/:token`: formulario público con consentimiento separado.
 - `/formularios`: bandeja de respuestas para revisión humana.
-- `/campanas`: estructura preparada; el envío SES queda bloqueado hasta validar sandbox, dominio y consentimiento.
+- `/campanas`: composición y envío SES con confirmación explícita; solo se muestran contactos con consentimiento de marketing concedido y sin supresión.
+- MCP: `import_curated_providers` importa lotes curados por Claude en modo dry-run y, con `confirm=true`, los deja como candidatos sin enviar correos. La conexión SSH/stdio está documentada en [`docs/claude-mcp.md`](docs/claude-mcp.md).
+
+La primera versión no convierte un correo público en permiso de marketing: los contactos descubiertos por curaduría quedan en `unknown`. Solo el formulario público con la casilla de marketing marcada los vuelve elegibles para una campaña.
 
 ## Seguridad pendiente antes de producción
 

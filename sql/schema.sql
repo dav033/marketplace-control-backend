@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS marketplace.campaigns (
   campaign_type text NOT NULL DEFAULT 'marketing' CHECK (campaign_type IN ('marketing','transactional')),
   status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','scheduled','sending','paused','completed','cancelled')),
   subject text NOT NULL,
+  body_text text NOT NULL DEFAULT '',
   sender_email text NOT NULL CHECK (sender_email = lower(sender_email)),
   reply_to_email text CHECK (reply_to_email IS NULL OR reply_to_email = lower(reply_to_email)),
   ses_configuration_set text,
@@ -159,6 +160,7 @@ ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS legal_name text;
 ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS latitude numeric(9,6);
 ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS longitude numeric(9,6);
 ALTER TABLE marketplace.registration_submissions ADD COLUMN IF NOT EXISTS consent_ip inet;
+ALTER TABLE marketplace.campaigns ADD COLUMN IF NOT EXISTS body_text text NOT NULL DEFAULT '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_contacts_email ON marketplace.contacts (lower(email));
 CREATE INDEX IF NOT EXISTS ix_providers_status_city_category ON marketplace.providers (status, city, category);

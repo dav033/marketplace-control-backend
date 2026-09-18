@@ -238,6 +238,55 @@ Pendientes prioritarios:
 5. Cerrar SSH público mediante runner privado o SSM cuando el deploy alternativo esté listo.
 6. Decidir la limpieza de base de datos. La petición de borrar “toda la información” quedó pausada y **no se ejecutó**.
 
+## 9. Primera versión de curaduría y campañas — 2026-09-17
+
+Se implementó la primera versión end-to-end solicitada para que Claude pueda producir
+proveedores curados, importarlos de forma segura y permitir campañas desde el panel.
+
+### Curaduría
+
+- `src/lib/curation.ts` valida el TSV exacto de 18 columnas del prompt: encabezado,
+  columnas, categorías, ID, rating mínimo 4.5, umbrales Tipo 1/Tipo 2, nivel A/B,
+  evidencia, URL directa, fecha, teléfono, Instagram, correo y duplicados.
+- `src/pages/api/providers/import.ts` importa transaccionalmente las filas aceptadas
+  y devuelve el detalle de las rechazadas sin inventar valores.
+- `scripts/curation.test.ts` cubre filas válidas, umbrales, URL de búsqueda,
+  evidencia débil, columnas incorrectas y normalización.
+
+### MCP conectado a la aplicación
+
+- Se añadió `import_curated_providers` a `mcp-server/src/index.ts`.
+- El tool recibe JSON estructurado, valida el lote completo, opera en dry-run por
+  defecto y solo escribe con `confirm=true`.
+- La escritura es transaccional/idempotente sobre proveedores, fuentes y contactos;
+  los proveedores quedan como `candidate`, los contactos nuevos como `unknown` y no
+  existe envío de correo desde MCP.
+- Se documentó la conexión local Claude Desktop/Claude Code por SSH/stdio en
+  `docs/claude-mcp.md` y `deploy/mcp-client-config.example.json`.
+
+### Campañas y consentimiento
+
+- `src/pages/campanas/index.astro` y `src/pages/api/campaigns/index.ts` ya permiten
+  seleccionar destinatarios elegibles, redactar el mensaje, confirmar y registrar
+  el resultado.
+- `src/lib/campaigns.ts` usa SES v2 desde el servidor, registra cada envío y genera
+  enlaces de registro con token opaco.
+- `sql/schema.sql` conserva el cuerpo de la campaña y aplica la migración idempotente.
+- `src/pages/api/public/form-submit.ts` guarda el consentimiento de marketing solo
+  cuando el usuario lo marca; ese consentimiento habilita al contacto para campañas.
+
+### Verificación de esta versión
+
+- `node --experimental-strip-types scripts/curation.test.ts` ✅
+- `npm run build` ✅ (0 errores; solo hints generados por Astro)
+- `npm --prefix .\\mcp-server run check` ✅ (build + handshake + dry-run MCP)
+- `git diff --check` ✅
+
+Antes de hacer un envío real todavía deben estar resueltos la identidad/DKIM y el
+estado de producción de SES. La conexión Claude/MCP requiere además una clave SSH
+local válida para `ec2-user`; no se guardan claves, `DATABASE_URL` ni tokens en el
+repositorio.
+
 Para la limpieza hay que elegir explícitamente:
 
 - borrar todos los registros conservando base, tablas y esquema; o

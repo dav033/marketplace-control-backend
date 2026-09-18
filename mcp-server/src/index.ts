@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { Pool, type QueryResultRow } from "pg";
+import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { z } from "zod";
 
 const MAX_LIMIT = 100;
@@ -19,6 +19,43 @@ const SUBMISSION_STATUSES = [
   "spam",
   "converted",
 ] as const;
+const MAX_IMPORT_ROWS = 50;
+const CURATED_CATEGORY_CODES = {
+  "Lugar": "01",
+  "Comida y Bebida": "02",
+  "Música": "03",
+  "Servicios Especializados": "04",
+  "Entretenimiento": "05",
+  "Decoración temática": "06",
+  "Fotografía y Video": "07",
+  "Invitación digital": "08",
+  "Menaje y mantelería": "09",
+  "Carpas y mobiliario": "10",
+} as const;
+const CURATED_CATEGORIES = Object.keys(CURATED_CATEGORY_CODES) as [keyof typeof CURATED_CATEGORY_CODES, ...(keyof typeof CURATED_CATEGORY_CODES)[]];
+const CURATED_SEGMENTS = ["Bajo Costo", "Premium", "Sin clasificar"] as const;
+const CURATED_ZONES = [
+  "Zona Norte / Comercial Alta",
+  "Zona Centro / Tradicional",
+  "Zona Sur / Occidente Comercial",
+  "Zona Campestre / Periferia",
+  "Área Metropolitana",
+  "Cobertura Nacional",
+  "Sin dato",
+] as const;
+const CURATED_SCALES = [
+  "Pequeño (Hasta 50 pers.)",
+  "Mediano (50 a 200 pers.)",
+  "Masivo (Más de 200 pers.)",
+  "Sin dato",
+] as const;
+const CURATED_FORMALITY = [
+  "Formalizado (NIT - Empresa)",
+  "Independiente (RUT - Persona Natural)",
+  "No verificado",
+] as const;
+const CURATED_PROVIDER_TYPES = ["type_1_local", "type_2_by_order"] as const;
+const CURATED_LEVELS = ["A", "B"] as const;
 
 let pool: Pool | undefined;
 
@@ -98,6 +135,202 @@ function maskPhone(phone: string | null): string | null {
   const digits = phone.replace(/\D/g, "");
   if (digits.length < 3) return "***";
   return `***${digits.slice(-2)}`;
+}
+
+function safeText(maximum: number, minimum = 1) {
+  return z.string()
+    .trim()
+    .min(minimum)
+    .max(maximum)
+    .refine((value) => !/[\u0000-\u001F\u007F]/.test(value), "No puede contener caracteres de control.");
+}
+
+const curatedProviderRowSchema = z.object({
+  id: z.string().trim().regex(/^[A-Z]{3}-\d{2}-\d{3}$/, "Debe tener formato ABC-01-001."),
+  display_name: safeText(200),
+  category: z.enum(CURATED_CATEGORIES),
+  segment: z.enum(CURATED_SEGMENTS),
+  city: safeText(120),
+  zone: z.enum(CURATED_ZONES),
+  scale: z.enum(CURATED_SCALES),
+  formality: z.enum(CURATED_FORMALITY),
+  rating: z.number().finite().min(4.5).max(5),
+  review_count: z.number().int().min(1).max(1_000_000),
+  reputation_platform: safeText(80),
+  curation_level: z.enum(CURATED_LEVELS),
+  curation_reason: safeText(1_000),
+  phone: z.union([
+    z.literal("Sin dato"),
+    z.string().trim().regex(/^\+57 \d{7,10}$/, "Usa +57 seguido del número, separado por un espacio."),
+  ]),
+  instagram: z.union([
+    z.literal("Sin Redes"),
+    z.string().trim().regex(/^@[A-Za-z0-9._]{2,60}$/, "Instagram debe comenzar con @."),
+  ]),
+  email: z.union([
+    z.literal("Sin dato"),
+    z.string().trim().toLowerCase().max(320).email(),
+  ]),
+  source_url: z.string().trim().url().max(2_048),
+  verification_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  provider_type: z.enum(CURATED_PROVIDER_TYPES),
+  event_evidence: safeText(600),
+  activity_evidence: safeText(600),
+}).strict();
+
+const importCuratedProvidersSchema = z.object({
+  batch_id: safeText(120).optional(),
+  confirm: z.boolean().default(false),
+  rows: z.array(curatedProviderRowSchema).min(1).max(MAX_IMPORT_ROWS),
+}).strict();
+
+type CuratedProviderRow = z.infer<typeof curatedProviderRowSchema>;
+
+function normalizeKey(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+}
+
+function isRealDate(value: string): boolean {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
+function isDirectSourceUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+
+  if (!(["http:", "https:"] as string[]).includes(parsed.protocol)) return false;
+  const path = parsed.pathname.toLowerCase();
+  if (path.split("/").includes("search") || path.includes("/maps/search")) return false;
+  for (const parameter of ["q", "query", "api", "text"]) {
+    if (parsed.searchParams.has(parameter)) return false;
+  }
+  return true;
+}
+
+function validateCuratedBatch(rows: CuratedProviderRow[]) {
+  const issues: string[] = [];
+  const seenIds = new Set<string>();
+  const seenProviders = new Set<string>();
+  const emailOwners = new Map<string, string>();
+  const first = rows[0];
+
+  for (const [index, row] of rows.entries()) {
+    const label = `rows[${index}]`;
+    const categoryCode = CURATED_CATEGORY_CODES[row.category];
+    const idParts = row.id.match(/^([A-Z]{3})-(\d{2})-(\d{3})$/);
+    const providerKey = normalizeKey(`${row.display_name}|${row.city}|${row.category}`);
+
+    if (!isRealDate(row.verification_date)) {
+      issues.push(`${label}.verification_date no es una fecha válida.`);
+    }
+    if (!isDirectSourceUrl(row.source_url)) {
+      issues.push(`${label}.source_url debe ser una URL directa de ficha, no una búsqueda.`);
+    }
+    if (idParts && idParts[2] !== categoryCode) {
+      issues.push(`${label}.id usa categoría ${idParts[2]}, pero la categoría requiere ${categoryCode}.`);
+    }
+    if (seenIds.has(row.id)) issues.push(`${label}.id está repetido dentro del lote.`);
+    seenIds.add(row.id);
+    if (seenProviders.has(providerKey)) {
+      issues.push(`${label} duplica el proveedor por nombre, ciudad y categoría.`);
+    }
+    seenProviders.add(providerKey);
+
+    const minimumReviews = row.provider_type === "type_1_local" ? 50 : 15;
+    if (row.review_count < minimumReviews) {
+      issues.push(`${label} no supera el mínimo de ${minimumReviews} reseñas para ${row.provider_type}.`);
+    }
+    const expectedLevel = row.review_count >= 50 ? "A" : "B";
+    if (row.curation_level !== expectedLevel) {
+      issues.push(`${label}.curation_level debe ser ${expectedLevel} para ${row.review_count} reseñas.`);
+    }
+    if (row.provider_type === "type_1_local" && row.curation_level !== "A") {
+      issues.push(`${label}: un proveedor Tipo 1 no puede entrar con nivel B.`);
+    }
+
+    if (row.email !== "Sin dato") {
+      const previousOwner = emailOwners.get(row.email);
+      if (previousOwner && previousOwner !== providerKey) {
+        issues.push(`${label}.email aparece asociado a más de un proveedor en el lote.`);
+      }
+      emailOwners.set(row.email, providerKey);
+    }
+  }
+
+  if (first) {
+    for (const [index, row] of rows.entries()) {
+      if (row.city !== first.city || row.category !== first.category) {
+        issues.push(`rows[${index}] debe compartir ciudad y categoría con todo el lote.`);
+      }
+    }
+  }
+
+  return issues;
+}
+
+function curatedRawPayload(row: CuratedProviderRow) {
+  return {
+    id: row.id,
+    category: row.category,
+    segment: row.segment,
+    city: row.city,
+    zone: row.zone,
+    scale: row.scale,
+    formality: row.formality,
+    rating: row.rating,
+    review_count: row.review_count,
+    reputation_platform: row.reputation_platform,
+    curation_level: row.curation_level,
+    curation_reason: row.curation_reason,
+    instagram: row.instagram,
+    source_url: row.source_url,
+    verification_date: row.verification_date,
+    provider_type: row.provider_type,
+    event_evidence: row.event_evidence,
+    activity_evidence: row.activity_evidence,
+  };
+}
+
+async function upsertCuratedContact(
+  client: PoolClient,
+  row: CuratedProviderRow,
+  providerId: string,
+): Promise<"missing" | "created" | "updated" | "conflict"> {
+  if (row.email === "Sin dato") return "missing";
+
+  const existing = await client.query<{ contact_id: string; provider_id: string | null }>(
+    `SELECT contact_id::text, provider_id::text FROM marketplace.contacts WHERE lower(email) = $1 FOR UPDATE`,
+    [row.email],
+  );
+  const phone = row.phone === "Sin dato" ? null : row.phone;
+
+  if (existing.rows[0]) {
+    const contact = existing.rows[0];
+    await client.query(
+      `UPDATE marketplace.contacts
+       SET provider_id = COALESCE(provider_id, $2),
+           phone = COALESCE($3, phone),
+           updated_at = now()
+       WHERE contact_id = $1`,
+      [contact.contact_id, providerId, phone],
+    );
+    return contact.provider_id && contact.provider_id !== providerId ? "conflict" : "updated";
+  }
+
+  await client.query(
+    `INSERT INTO marketplace.contacts (provider_id, email, phone, consent_status)
+     VALUES ($1, $2, $3, 'unknown')`,
+    [providerId, row.email, phone],
+  );
+  return "created";
 }
 
 type ProviderRow = QueryResultRow & {
@@ -415,6 +648,176 @@ server.registerTool(
       })),
     };
   }),
+);
+
+server.registerTool(
+  "import_curated_providers",
+  {
+    title: "Importar proveedores curados",
+    description: "Valida y, solo con confirm=true, importa un lote curado por Claude. Crea o actualiza proveedores, fuentes y contactos con consentimiento unknown; nunca envía correo.",
+    inputSchema: importCuratedProvidersSchema,
+  },
+  async ({ batch_id, confirm, rows }) => {
+    const issues = validateCuratedBatch(rows);
+    if (issues.length > 0) {
+      return {
+        isError: true,
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            error: "VALIDATION_FAILED",
+            issues,
+            rows_received: rows.length,
+            written: false,
+          }),
+        }],
+      };
+    }
+
+    const preview = {
+      rows: rows.length,
+      city: rows[0].city,
+      category: rows[0].category,
+      candidate_status: "candidate",
+      emails_to_link: rows.filter((row) => row.email !== "Sin dato").length,
+      source_urls: rows.length,
+    };
+
+    if (!confirm) {
+      return result({
+        ok: true,
+        dry_run: true,
+        batch_id: batch_id ?? null,
+        ...preview,
+        next_step: "Repite exactamente el lote con confirm=true para escribirlo.",
+        email_sending: "not_supported",
+      });
+    }
+
+    return execute(async (db) => {
+      const client = await db.connect();
+      let providersInserted = 0;
+      let providersUpdated = 0;
+      let sourcesUpserted = 0;
+      let contactsCreated = 0;
+      let contactsUpdated = 0;
+      let contactsMissing = 0;
+      let contactsConflicted = 0;
+
+      try {
+        await client.query("BEGIN");
+        for (const row of rows) {
+          const dedupeKey = normalizeKey(`${row.display_name}|${row.city}|${row.category}`);
+          const phone = row.phone === "Sin dato" ? null : row.phone;
+          const providerResponse = await client.query<{ provider_id: string; inserted: boolean }>(
+            `INSERT INTO marketplace.providers
+              (dedupe_key, display_name, category, city, website_url, phone, rating, review_count, status, discovery_source, notes)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'candidate', $9, $10)
+             ON CONFLICT (dedupe_key) DO UPDATE SET
+               website_url = EXCLUDED.website_url,
+               phone = COALESCE(EXCLUDED.phone, marketplace.providers.phone),
+               rating = EXCLUDED.rating,
+               review_count = EXCLUDED.review_count,
+               discovery_source = EXCLUDED.discovery_source,
+               notes = EXCLUDED.notes,
+               updated_at = now()
+             RETURNING provider_id::text, (xmax = 0) AS inserted`,
+            [
+              dedupeKey,
+              row.display_name,
+              row.category,
+              row.city,
+              row.source_url,
+              phone,
+              row.rating,
+              row.review_count,
+              "MCP Claude curated",
+              row.curation_reason,
+            ],
+          );
+
+          const providerId = providerResponse.rows[0].provider_id;
+          if (providerResponse.rows[0].inserted) providersInserted += 1;
+          else providersUpdated += 1;
+
+          const sourceFingerprintSeed = `${row.reputation_platform}|${row.source_url}|${row.id}|${dedupeKey}`;
+          await client.query(
+            `INSERT INTO marketplace.provider_sources
+              (provider_id, source_name, source_url, source_record_key, source_fingerprint, observed_name, observed_rating, observed_reviews, raw_payload)
+             VALUES ($1, $2, $3, $4, encode(digest($5, 'sha256'), 'hex'), $6, $7, $8, $9)
+             ON CONFLICT (source_fingerprint) DO UPDATE SET
+               provider_id = EXCLUDED.provider_id,
+               source_name = EXCLUDED.source_name,
+               source_url = EXCLUDED.source_url,
+               observed_name = EXCLUDED.observed_name,
+               observed_rating = EXCLUDED.observed_rating,
+               observed_reviews = EXCLUDED.observed_reviews,
+               raw_payload = EXCLUDED.raw_payload,
+               last_seen_at = now()`,
+            [
+              providerId,
+              row.reputation_platform,
+              row.source_url,
+              row.id,
+              sourceFingerprintSeed,
+              row.display_name,
+              row.rating,
+              row.review_count,
+              JSON.stringify(curatedRawPayload(row)),
+            ],
+          );
+          sourcesUpserted += 1;
+
+          const contactResult = await upsertCuratedContact(client, row, providerId);
+          if (contactResult === "created") contactsCreated += 1;
+          if (contactResult === "updated") contactsUpdated += 1;
+          if (contactResult === "missing") contactsMissing += 1;
+          if (contactResult === "conflict") contactsConflicted += 1;
+        }
+
+        const summary = {
+          batch_id: batch_id ?? null,
+          rows_received: rows.length,
+          providers_inserted: providersInserted,
+          providers_updated: providersUpdated,
+          sources_upserted: sourcesUpserted,
+          contacts_created: contactsCreated,
+          contacts_updated: contactsUpdated,
+          contacts_missing: contactsMissing,
+          contacts_conflicted: contactsConflicted,
+          city: rows[0].city,
+          category: rows[0].category,
+          email_sending: "not_supported",
+        };
+        await client.query(
+          `INSERT INTO marketplace.audit_log (actor_id, action, entity_type, after_state, metadata)
+           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+          [
+            "mcp:claude",
+            "import_curated_providers",
+            "provider_batch",
+            JSON.stringify(summary),
+            JSON.stringify({ transport: "stdio", write_scope: ["providers", "provider_sources", "contacts"] }),
+          ],
+        );
+        await client.query("COMMIT");
+
+        return {
+          ok: true,
+          dry_run: false,
+          ...summary,
+          provider_status: "candidate",
+          consent_policy: "new contacts remain unknown; existing consent is never changed",
+          note: "No email was sent. This MCP write tool only imports curated data.",
+        };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    });
+  },
 );
 
 async function main() {

@@ -78,9 +78,9 @@ Opcional y recomendado: `DEPLOY_KNOWN_HOSTS`, con la línea de host key obtenida
 
 La clave pública correspondiente debe estar en `~/.ssh/authorized_keys` de EC2. No inventar ni copiar credenciales al workflow.
 
-## Idempotencia y rollback
+## Idempotencia, migraciones y rollback
 
-Cada SHA vive en `DEPLOY_PATH/releases/<sha>`. `current` cambia atómicamente solo después de `npm ci`, build y validación de Caddy. Si el servicio no queda activo, se intenta restaurar el release anterior. El archivo de entorno permanece fuera del repo.
+Cada SHA vive en `DEPLOY_PATH/releases/<sha>`. `current` cambia atómicamente solo después de `npm ci`, build, aplicación idempotente de `sql/schema.sql` y validación de Caddy. Si el servicio no queda activo, se intenta restaurar el release anterior. El archivo de entorno permanece fuera del repo.
 
 ## Validación local
 

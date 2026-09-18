@@ -67,6 +67,13 @@ sudo test -f "$env_file" || fail "falta $env_file; copiar deploy/marketplace-con
 sudo grep -Eq '^DATABASE_URL=[^[:space:]]+$' "$env_file" || fail 'DATABASE_URL vacío o ausente en el archivo externo'
 sudo grep -Eq '^ADMIN_ACCESS_KEY=[^[:space:]]+$' "$env_file" || fail 'ADMIN_ACCESS_KEY vacío o ausente en el archivo externo'
 
+# La instalación de marketplace usa PostgreSQL local. El esquema es idempotente
+# y se aplica antes de reiniciar la app para que las migraciones de runtime
+# acompañen al release.
+if [[ -f "$release_dir/sql/schema.sql" ]] && command -v psql >/dev/null 2>&1; then
+  sudo -n -u postgres psql --dbname=marketplace --set ON_ERROR_STOP=1 --file="$release_dir/sql/schema.sql" >/dev/null || fail 'no se pudo aplicar sql/schema.sql'
+fi
+
 node_bin="$(command -v node)"
 sudo install -d -m 0750 -o root -g root /etc/marketplace-control
 sudo install -m 0755 -o root -g root "$release_dir/deploy/mcp-stdio.sh" "$mcp_wrapper"
