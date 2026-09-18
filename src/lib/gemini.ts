@@ -2,48 +2,34 @@ import { CURATION_HEADERS, parseCurationTsv, validateCurationBatch } from './cur
 
 const GEMINI_INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
-const categories = [
-  'Lugar',
-  'Comida y Bebida',
-  'Música',
-  'Servicios Especializados',
-  'Entretenimiento',
-  'Decoración temática',
-  'Fotografía y Video',
-  'Invitación digital',
-  'Menaje y mantelería',
-  'Carpas y mobiliario',
-] as const;
-
 const rowSchema = {
   type: 'object',
   properties: {
-    id: { type: 'string', description: 'ID único en formato ABC-CC-###.' },
+    id: { type: 'string' },
     display_name: { type: 'string' },
-    category: { type: 'string', description: `Una de: ${categories.join(', ')}.` },
+    category: { type: 'string' },
     segment: { type: 'string' },
     city: { type: 'string' },
     zone: { type: 'string' },
     scale: { type: 'string' },
     formality: { type: 'string' },
-    rating: { type: 'string', description: 'Número entre 4.5 y 5.0 con un decimal.' },
-    review_count: { type: 'string', description: 'Número entero de reseñas.' },
+    rating: { type: 'string' },
+    review_count: { type: 'string' },
     reputation_platform: { type: 'string' },
     curation_level: { type: 'string' },
-    curation_reason: { type: 'string', description: 'Debe incluir calificación, reseñas, plataforma, evidencia de eventos y actividad reciente.' },
+    curation_reason: { type: 'string' },
     phone: { type: 'string' },
     instagram: { type: 'string' },
     email: { type: 'string' },
-    source_url: { type: 'string', description: 'URL directa de la ficha o perfil, nunca URL de búsqueda.' },
-    verification_date: { type: 'string', description: 'Fecha ISO AAAA-MM-DD.' },
+    source_url: { type: 'string' },
+    verification_date: { type: 'string' },
   },
-  required: ['id', 'display_name', 'category', 'segment', 'city', 'zone', 'scale', 'formality', 'rating', 'review_count', 'reputation_platform', 'curation_level', 'curation_reason', 'phone', 'instagram', 'email', 'source_url', 'verification_date'],
 };
 
 const responseSchema = {
   type: 'object',
   properties: {
-    rows: { type: 'array', minItems: 1, maxItems: 12, items: rowSchema },
+    rows: { type: 'array', items: rowSchema },
     research_summary: { type: 'string' },
   },
   required: ['rows', 'research_summary'],
