@@ -730,9 +730,11 @@ brazo de control.
 
 ### Decisiones del negocio
 
-1. **Envío QA de correo.** `POST /api/campaigns/qa-test` dispara un test-email a
-   cuatro buzones reales (`QA_TEST_RECIPIENTS`). Nunca se ejecutó: hace falta
-   autorización explícita. Sus guardas sí están probadas.
+1. ~~**Envío QA de correo.**~~ **Hecho el 2026-09-21.** Se ejecutó un envío real,
+   y no por `qa-test` sino por la campaña de verdad (`POST /api/campaigns`), que
+   es lo que ejercita la cadena completa. `QA_TEST_RECIPIENTS` estaba puesto a un
+   único buzón propio y era además el único contacto elegible de la base,
+   comprobado con un `SELECT` antes de disparar. Ver sección 33.
 2. **Días de caducidad del enlace.** 30 es una suposición.
 3. **Texto legal del consentimiento** en el formulario de registro.
 4. **Categorías que no encajan.** Si un proveedor hace algo fuera de las 10
@@ -836,6 +838,11 @@ pertinencia del agente.
 
 ## 31. Plan: cableado del envío al registro confirmado
 
+> **Ejecutado el 2026-09-21.** Los cuatro pasos están hechos y probados de extremo
+> a extremo con correo real. Lo que sigue se conserva como el plan que se siguió;
+> lo que realmente ocurrió al ejecutarlo —incluidas dos correcciones que el plan no
+> preveía y una decisión en contra de lo que insinuaba 31.3— está en la sección 33.
+
 Cadena completa: **se manda el correo → llega → el proveedor pulsa el enlace →
 cae en el formulario → lo rellena → el proveedor pasa a confirmado**.
 
@@ -855,7 +862,7 @@ Buena parte ya existe. Esto detalla qué hay, qué falta y dónde tocarlo.
 
 ### 31.2 Los tres huecos
 
-**A · El enlace del correo no pasa por el contador de clics.**
+**A · El enlace del correo no pasa por el contador de clics.** — *Cerrado.*
 `campaigns.ts:87` pone `registration_url` como `${baseUrl}/registro/${token}`,
 apuntando directo al formulario. El contador vive en `/t/<token>` y nadie lo
 llama, así que `email_clicks` nunca se rellena y la métrica «Mostraron interés»
@@ -865,7 +872,7 @@ del panel siempre marcará cero.
 después que `/t/<token>` redirige con 302 a `/registro/<token>` y que aparece la
 fila en `email_clicks`.
 
-**B · Rellenar el formulario no cambia el estado del proveedor.**
+**B · Rellenar el formulario no cambia el estado del proveedor.** — *Cerrado.*
 `form-submit.ts` inserta en `registration_submissions` y marca el envío, pero no
 toca `marketplace.providers`. El proveedor sigue en `candidate` después de
 haberse registrado él mismo, que es justo la señal más fuerte que puede dar.
@@ -876,21 +883,25 @@ la tabla: `candidate`, `under_review`, `approved`, `rejected`, `archived`. Se
 recomienda **no** saltar a `approved` de forma automática: que una persona
 apruebe.
 
-**C · No hay envío real de campaña desde el panel.**
+**C · No hay envío real de campaña desde el panel.** — *Este hueco no existía.*
 Existe `sendEmailCampaign` en la librería, pero la pantalla de campañas no lo
 dispara. Hoy solo hay el envío de prueba.
+
+> Al ejecutarlo resultó que sí lo disparaba: `sendCampaign` ya encadenaba todo y el
+> botón «Enviar a seleccionados» ya lo llamaba. El hueco real era otro y estaba más
+> abajo: un 400 de Omnisend que tumbaba cualquier envío. Ver 33.1.
 
 ### 31.3 Orden de implementación
 
 Cada paso es verificable por separado. No pasar al siguiente sin comprobar el
 anterior.
 
-**Paso 1 — Enrutar el enlace por el contador.**
+**Paso 1 — Enrutar el enlace por el contador.** ✅
 Tocar `src/lib/campaigns.ts`, la línea de `customProperties.registration_url`.
 Verificación: crear una campaña de prueba y comprobar en la base que
 `email_clicks` recibe una fila al abrir `/t/<token>`.
 
-**Paso 2 — Confirmar al proveedor al recibir el formulario.**
+**Paso 2 — Confirmar al proveedor al recibir el formulario.** ✅
 Primero la migración del `CHECK` de estados (ver 31.6), porque sin ella el
 `UPDATE` falla. Después tocar `src/pages/api/public/form-submit.ts`: el `UPDATE`
 que lleva el proveedor a `unconfirmed` va junto al `UPDATE` de `campaign_sends`,
@@ -904,7 +915,7 @@ Repasar también lo que asume la lista de estados: `ProviderStatus` en
 Verificación: enviar el formulario con un token real y comprobar que el proveedor
 pasa a `under_review` y que la vista de proveedores lo refleja.
 
-**Paso 3 — Envío real desde el panel.**
+**Paso 3 — Envío real desde el panel.** ✅
 Encadenar en `campaigns.ts`: `upsertConsentedContact` para cada destinatario,
 `createTagSegment` + `waitForSegmentReady`, `importEmailTemplate`,
 `createEmailCampaignDraft` y `sendEmailCampaign`. Todo eso ya está escrito en
@@ -914,7 +925,7 @@ ejercitar sin riesgo: el correo sale de verdad pero llega a una dirección propi
 **Antes de apuntarlo a proveedores reales hace falta autorización explícita del
 responsable**, y salir del sandbox de SES.
 
-**Paso 4 — Cerrar el círculo en el panel.**
+**Paso 4 — Cerrar el círculo en el panel.** ✅
 La pantalla de campañas ya tiene el endpoint de estadísticas. Mostrar por campaña:
 enviados, clics registrados y formularios recibidos. Las dos primeras salen de
 `campaign_sends` y `email_clicks`; la tercera de `registration_submissions`.
@@ -1027,7 +1038,8 @@ rellena el formulario. El nombre acordado es **`unconfirmed`** («unconfirmed
 provider»).
 
 Esto **sí necesita migración**, porque `providers.status` tiene un `CHECK` con la
-lista cerrada de valores. Va antes del paso 2:
+lista cerrada de valores. Va antes del paso 2. **Aplicada en producción el
+2026-09-21** y guardada en `sql/2026-09-21-providers-status-unconfirmed.sql`:
 
 ```sql
 ALTER TABLE marketplace.providers DROP CONSTRAINT IF EXISTS providers_status_check;
@@ -1039,7 +1051,9 @@ ALTER TABLE marketplace.providers
 Se aplica por SSH como `postgres`, según la sección 15. Después hay que repasar
 todo lo que asume la lista de estados: el tipo `ProviderStatus` en
 `src/lib/types.ts`, el componente `StatusBadge`, el filtro de estado de la vista
-de proveedores y los datos de demostración en `src/lib/demo.ts`.
+de proveedores y los datos de demostración en `src/lib/demo.ts`. Repasado, y con
+dos sitios más que la lista no nombraba: el color del badge en `AppLayout.astro` y
+el conteo «Por revisar» de `data.ts`.
 
 *Observación sobre el nombre:* `unconfirmed` se lee como «sin confirmar», y el
 proveedor que llega a ese estado es justamente el que **sí** confirmó sus datos;
@@ -1171,3 +1185,12 @@ Con `Origin` puesto responde el 409 que corresponde.
   campaña de verdad.
 - **Nadie aprueba todavía.** `unconfirmed` espera a un operador, pero no hay
   acción en el panel para pasar de ahí a `approved`.
+
+### 33.4 Commits
+
+```text
+43076ab merge: cableado del envío al registro confirmado
+55d1c91 docs: el cableado del registro confirmado, ejecutado y probado
+639f9cb feat: el panel cierra el círculo con clics y formularios por campaña
+587d4bf feat: el correo enrutado por el contador y el registro mueve al proveedor
+```
