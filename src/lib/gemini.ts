@@ -6,6 +6,7 @@ import { currentCurationContext, logClaudeRun, logCurationEvent, redactCommand, 
 import { isGooglePlacesConfigured, lookupGooglePlaceReputation, toDomain, toE164Colombia } from './google-places';
 import { formatHarvestForPrompt, harvestCategoryCandidates, hasHarvestQueries, isContactable, type HarvestedPlace } from './places-harvest';
 import { harvestedPlaceToRow } from './harvest-import';
+import { scrapeProviderContact } from './contact-scrape';
 
 const GEMINI_INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const MAX_CURATION_CANDIDATES = 20;
@@ -1297,7 +1298,7 @@ async function enrichMissingReputationWithGooglePlaces(tsv: string, city: string
  * Lo encontrado por el agente manda: sus filas van primero y solo se anaden las que faltan,
  * deduplicando por nombre y por telefono para no repetir el mismo negocio con otro rotulo.
  */
-export function completeBatchFromHarvest(input: {
+export async function completeBatchFromHarvest(input: {
   tsv: string;
   places: HarvestedPlace[];
   city: string;
@@ -1305,12 +1306,12 @@ export function completeBatchFromHarvest(input: {
   minRating: number;
   minReviews: number;
   targetCount: number;
-}): { tsv: string; added: number } {
+}): Promise<{ tsv: string; added: number; withEmail: number }> {
   const lines = input.tsv.replace(/\r\n?/g, '\n').split('\n');
   const header = lines[0] ?? '';
   const rows = lines.slice(1).filter(line => line.trim());
   const missing = input.targetCount - rows.length;
-  if (missing <= 0 || !input.places.length) return { tsv: input.tsv, added: 0 };
+  if (missing <= 0 || !input.places.length) return { tsv: input.tsv, added: 0, withEmail: 0 };
 
   const seenNames = new Set<string>();
   const seenPhones = new Set<string>();
@@ -1321,10 +1322,9 @@ export function completeBatchFromHarvest(input: {
     if (digits.length >= 10) seenPhones.add(digits.slice(-10));
   }
 
-  const extra: string[] = [];
-  let index = rows.length + 1;
+  const chosen: HarvestedPlace[] = [];
   for (const place of input.places) {
-    if (extra.length >= missing) break;
+    if (chosen.length >= missing) break;
     if (typeof place.rating !== 'number' || typeof place.reviews !== 'number') continue;
     if (place.rating < input.minRating || place.reviews < input.minReviews) continue;
     const nameKey = normalizePromptKey(place.name);
@@ -1332,15 +1332,43 @@ export function completeBatchFromHarvest(input: {
     const phoneDigits = (place.phone ?? '').replace(/\D/g, '');
     const phoneKey = phoneDigits.length >= 10 ? phoneDigits.slice(-10) : '';
     if (phoneKey && seenPhones.has(phoneKey)) continue;
-    const row = harvestedPlaceToRow(place, input.city, input.category, index);
-    if (!row) continue;
-    extra.push(row.join('\t'));
+    chosen.push(place);
     seenNames.add(nameKey);
     if (phoneKey) seenPhones.add(phoneKey);
+  }
+  if (!chosen.length) return { tsv: input.tsv, added: 0, withEmail: 0 };
+
+  // El canal de contacto lo decide el correo: con correo corporativo se escribe, sin el queda
+  // WhatsApp. El registro oficial no da correo, asi que sin leer el sitio TODO lo anadido caia
+  // a WhatsApp por descarte, no porque el negocio no tenga correo.
+  const contacts = new Map<string, { email?: string; instagram?: string }>();
+  const CONCURRENCY = 4;
+  const withSite = chosen.filter(place => place.website);
+  for (let start = 0; start < withSite.length; start += CONCURRENCY) {
+    const batch = withSite.slice(start, start + CONCURRENCY);
+    const found = await Promise.all(batch.map(async place => ({
+      placeId: place.placeId,
+      contact: await scrapeProviderContact(place.website as string).catch(() => ({})),
+    })));
+    for (const entry of found) contacts.set(entry.placeId, entry.contact);
+  }
+
+  const extra: string[] = [];
+  let index = rows.length + 1;
+  let withEmail = 0;
+  for (const place of chosen) {
+    const contact = contacts.get(place.placeId);
+    const verification = contact && (contact.email || contact.instagram)
+      ? new Map([[place.placeId, { relevant: true, email: contact.email, instagram: contact.instagram }]])
+      : undefined;
+    const row = harvestedPlaceToRow(place, input.city, input.category, index, { verification });
+    if (!row) continue;
+    if (contact?.email) withEmail += 1;
+    extra.push(row.join('\t'));
     index += 1;
   }
-  if (!extra.length) return { tsv: input.tsv, added: 0 };
-  return { tsv: [header, ...rows, ...extra].join('\n'), added: extra.length };
+  if (!extra.length) return { tsv: input.tsv, added: 0, withEmail: 0 };
+  return { tsv: [header, ...rows, ...extra].join('\n'), added: extra.length, withEmail };
 }
 
 export function filterByReputationThreshold(
@@ -1711,12 +1739,12 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
   // El agente manda: sus hallazgos van primero y el registro solo rellena lo que falte hasta el
   // objetivo. Sin esto el lote se quedaba en lo que el agente alcanzara, muy por debajo de los
   // negocios que cumplen el umbral y tienen ficha publica.
-  const completed = completeBatchFromHarvest({
+  const completed = await completeBatchFromHarvest({
     tsv: filtered.tsv, places: harvestedPlaces, city, category, minRating, minReviews, targetCount,
   });
   const tsv = completed.tsv;
   if (completed.added) {
-    logCurationEvent('batch_completed', { ...runContext, anadidos: completed.added, delAgente: filtered.tsv.split('\n').length - 1 } as never);
+    logCurationEvent('batch_completed', { ...runContext, anadidos: completed.added, conCorreo: completed.withEmail, delAgente: filtered.tsv.split('\n').length - 1 } as never);
   }
   if (filtered.removed) {
     logCurationEvent('threshold_filter', { ...runContext, minRating, minReviews, removidos: filtered.removed, bajoUmbral: filtered.belowThreshold, sinReputacion: filtered.withoutReputation } as never);
