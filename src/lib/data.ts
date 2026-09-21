@@ -48,8 +48,15 @@ export async function getDashboard(): Promise<DashboardData> {
   }
 }
 
+/**
+ * `provider_id` es una columna uuid: un identificador con otra forma hace que PostgreSQL lance
+ * "invalid input syntax for type uuid" y la pagina devuelva 500 donde corresponde un 404.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export async function getProvider(id: string) {
   if (!pool || id.startsWith('demo-')) return demoProvider(id);
+  if (!UUID_PATTERN.test(id)) return null;
   const result = await query<Provider>(`
     SELECT p.provider_id, p.display_name, p.category, p.additional_categories, p.city, p.rating, p.review_count, p.contact_channel,
            p.status, p.discovery_source, c.email AS contact_email, NULL AS last_activity

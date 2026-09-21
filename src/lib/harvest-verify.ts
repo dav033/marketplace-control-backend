@@ -1,6 +1,7 @@
 import { runResearchAgent, type ClaudeRunResult } from './gemini';
 import { logCurationEvent } from './curation-log';
 import type { HarvestedPlace } from './places-harvest';
+import { scrapeProviderContact, type ScrapedContact } from './contact-scrape';
 
 const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
 
@@ -120,6 +121,24 @@ export async function verifyHarvestedCandidates(input: {
   };
   if (!input.candidates.length) return empty;
 
+  // Paso determinista primero: leer el sitio del proveedor. El agente no abre paginas — en una
+  // corrida real hizo 5 busquedas web y CERO aperturas, y encontro 0 correos de 3 candidatos.
+  // Descargar la portada y una pagina de contacto tarda un segundo y no puede inventarse nada.
+  input.onPhase?.('scraping', `Leyendo el sitio de ${input.candidates.length} candidatos.`);
+  const scraped = new Map<string, { email?: string; instagram?: string }>();
+  const withSite = input.candidates.filter(place => place.website);
+  const CONCURRENCY = 4;
+  for (let start = 0; start < withSite.length; start += CONCURRENCY) {
+    const batch = withSite.slice(start, start + CONCURRENCY);
+    const results = await Promise.all(batch.map(async place => ({
+      placeId: place.placeId,
+      contact: await scrapeProviderContact(place.website!).catch((): ScrapedContact => ({})),
+    })));
+    for (const { placeId, contact } of results) {
+      if (contact.email || contact.instagram) scraped.set(placeId, contact);
+    }
+  }
+
   const configured = String(env('CURATION_PROVIDER') || 'gemini').trim().toLowerCase();
   // La verificación necesita un CLI con búsqueda web; la vía Gemini de descubrimiento no aplica aquí.
   const provider: 'claude-code' | 'codex' = configured === 'claude-code' ? 'claude-code' : 'codex';
@@ -142,7 +161,19 @@ export async function verifyHarvestedCandidates(input: {
 
   const parsed = extractJsonArray(run.output);
   if (!parsed) {
-    return { ...empty, durationMs: Date.now() - startedAt, partial: run.partial, failureReason: 'VERIFY_OUTPUT_UNPARSEABLE' };
+    // El agente fallo, pero lo leido de los sitios sigue siendo valido y no se tira. La pertinencia
+    // queda sin juzgar, que es justo lo que el agente no pudo responder.
+    const fallback = new Map<string, CandidateVerification>();
+    for (const place of input.candidates) {
+      const fromSite = scraped.get(place.placeId);
+      if (fromSite) fallback.set(place.placeId, { relevant: true, email: fromSite.email, instagram: fromSite.instagram });
+    }
+    const values = [...fallback.values()];
+    return {
+      byPlaceId: fallback, verified: fallback.size, relevant: fallback.size,
+      withEmail: values.filter(v => v.email).length, withInstagram: values.filter(v => v.instagram).length,
+      durationMs: Date.now() - startedAt, partial: run.partial, failureReason: 'VERIFY_OUTPUT_UNPARSEABLE',
+    };
   }
 
   const byPlaceId = new Map<string, CandidateVerification>();
@@ -155,10 +186,12 @@ export async function verifyHarvestedCandidates(input: {
     if (!Number.isInteger(position) || position < 1 || position > input.candidates.length) continue;
     const place = input.candidates[position - 1];
     if (byPlaceId.has(place.placeId)) continue;
+    const fromSite = scraped.get(place.placeId);
     byPlaceId.set(place.placeId, {
       relevant: record.sirve === true,
-      email: normalizeEmail(record.correo),
-      instagram: normalizeInstagram(record.instagram),
+      // Lo leido del sitio manda sobre lo que diga el agente: es la fuente, no una interpretacion.
+      email: fromSite?.email ?? normalizeEmail(record.correo),
+      instagram: fromSite?.instagram ?? normalizeInstagram(record.instagram),
       note: typeof record.nota === 'string' ? record.nota.trim().slice(0, 160) : undefined,
     });
   }
