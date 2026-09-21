@@ -4,7 +4,8 @@ import { CURATION_HEADERS, isCorporateEmail, parseCurationTsv, parseMultiPlatfor
 import { curationCandidateKey, getCurationBlacklist, type CurationBlacklistEntry } from './curation-history';
 import { currentCurationContext, logClaudeRun, logCurationEvent, redactCommand, type ClaudeRunContext, type ClaudeRunRole } from './curation-log';
 import { isGooglePlacesConfigured, lookupGooglePlaceReputation, toDomain, toE164Colombia } from './google-places';
-import { formatHarvestForPrompt, harvestCategoryCandidates, hasHarvestQueries, isContactable } from './places-harvest';
+import { formatHarvestForPrompt, harvestCategoryCandidates, hasHarvestQueries, isContactable, type HarvestedPlace } from './places-harvest';
+import { harvestedPlaceToRow } from './harvest-import';
 
 const GEMINI_INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const MAX_CURATION_CANDIDATES = 20;
@@ -1286,6 +1287,62 @@ async function enrichMissingReputationWithGooglePlaces(tsv: string, city: string
  * un "Sin dato" no puede demostrar que cumple, y el operador pidio no ver nada fuera del rango.
  * Se devuelven los conteos por separado para poder decirle cuantos se fueron y por que.
  */
+/**
+ * Completa el lote del agente con negocios del registro oficial que el agente no alcanzo.
+ *
+ * Medido en Barranquilla, Comida y Bebida con umbral 4.5 y 50 resenas: el agente devolvia 8
+ * proveedores y el registro conocia 24 que cumplian, todos contactables. El agente llega a
+ * negocios sin ficha publica, que es su valor, pero se queda corto en los que si la tienen.
+ *
+ * Lo encontrado por el agente manda: sus filas van primero y solo se anaden las que faltan,
+ * deduplicando por nombre y por telefono para no repetir el mismo negocio con otro rotulo.
+ */
+export function completeBatchFromHarvest(input: {
+  tsv: string;
+  places: HarvestedPlace[];
+  city: string;
+  category: string;
+  minRating: number;
+  minReviews: number;
+  targetCount: number;
+}): { tsv: string; added: number } {
+  const lines = input.tsv.replace(/\r\n?/g, '\n').split('\n');
+  const header = lines[0] ?? '';
+  const rows = lines.slice(1).filter(line => line.trim());
+  const missing = input.targetCount - rows.length;
+  if (missing <= 0 || !input.places.length) return { tsv: input.tsv, added: 0 };
+
+  const seenNames = new Set<string>();
+  const seenPhones = new Set<string>();
+  for (const line of rows) {
+    const cells = line.split('\t');
+    seenNames.add(normalizePromptKey(cells[1] ?? ''));
+    const digits = (cells[13] ?? '').replace(/\D/g, '');
+    if (digits.length >= 10) seenPhones.add(digits.slice(-10));
+  }
+
+  const extra: string[] = [];
+  let index = rows.length + 1;
+  for (const place of input.places) {
+    if (extra.length >= missing) break;
+    if (typeof place.rating !== 'number' || typeof place.reviews !== 'number') continue;
+    if (place.rating < input.minRating || place.reviews < input.minReviews) continue;
+    const nameKey = normalizePromptKey(place.name);
+    if (seenNames.has(nameKey)) continue;
+    const phoneDigits = (place.phone ?? '').replace(/\D/g, '');
+    const phoneKey = phoneDigits.length >= 10 ? phoneDigits.slice(-10) : '';
+    if (phoneKey && seenPhones.has(phoneKey)) continue;
+    const row = harvestedPlaceToRow(place, input.city, input.category, index);
+    if (!row) continue;
+    extra.push(row.join('\t'));
+    seenNames.add(nameKey);
+    if (phoneKey) seenPhones.add(phoneKey);
+    index += 1;
+  }
+  if (!extra.length) return { tsv: input.tsv, added: 0 };
+  return { tsv: [header, ...rows, ...extra].join('\n'), added: extra.length };
+}
+
 export function filterByReputationThreshold(
   tsv: string,
   minRating: number,
@@ -1384,12 +1441,14 @@ export async function curateProviders(input: { city: string; category: string; i
   // calificación, reseñas y contacto verificados por la API, para que gaste sus búsquedas en
   // confirmar pertinencia y completar correo en vez de en descubrir nombres a ciegas.
   let harvestBlock = '';
+  let harvestedPlaces: HarvestedPlace[] = [];
   // CURATION_DISABLE_HARVEST=1 apaga la cosecha para poder medir el brazo de control del benchmark.
   const harvestEnabled = String(env('CURATION_DISABLE_HARVEST') || '').trim() !== '1';
   if (harvestEnabled && isGooglePlacesConfigured() && hasHarvestQueries(category)) {
     try {
       const harvest = await harvestCategoryCandidates(city, category);
       const usable = harvest.candidates.filter(isContactable);
+      harvestedPlaces = usable;
       logCurationEvent('places_harvest', {
         jobId: input.jobId, runId: input.runId, scanNumber: scanAttempt,
         category, apiCalls: harvest.apiCalls, durationMs: harvest.durationMs,
@@ -1649,7 +1708,16 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
   const withFallbackCandidates = appendFallbackCandidates(baseTsv, discoveredCandidates, city, category, runContext);
   const enriched = await enrichMissingReputationWithGooglePlaces(withFallbackCandidates, city, runContext);
   const filtered = filterByReputationThreshold(enriched, minRating, minReviews);
-  const tsv = filtered.tsv;
+  // El agente manda: sus hallazgos van primero y el registro solo rellena lo que falte hasta el
+  // objetivo. Sin esto el lote se quedaba en lo que el agente alcanzara, muy por debajo de los
+  // negocios que cumplen el umbral y tienen ficha publica.
+  const completed = completeBatchFromHarvest({
+    tsv: filtered.tsv, places: harvestedPlaces, city, category, minRating, minReviews, targetCount,
+  });
+  const tsv = completed.tsv;
+  if (completed.added) {
+    logCurationEvent('batch_completed', { ...runContext, anadidos: completed.added, delAgente: filtered.tsv.split('\n').length - 1 } as never);
+  }
   if (filtered.removed) {
     logCurationEvent('threshold_filter', { ...runContext, minRating, minReviews, removidos: filtered.removed, bajoUmbral: filtered.belowThreshold, sinReputacion: filtered.withoutReputation } as never);
   }
