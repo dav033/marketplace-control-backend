@@ -17,10 +17,14 @@ export const CURATION_HEADERS = [
   'Correo Electronico',
   'Fuente URL',
   'Fecha Verificación',
+  'Reputación Multiplataforma',
+  'Categorías Adicionales',
 ] as const;
 
 export type ProviderType = 1 | 2;
 export type ContactChannel = 'email' | 'whatsapp';
+
+export type MultiPlatformReputationEntry = { platform: string; rating: number; reviews: number };
 
 export type CurationFields = {
   id: string;
@@ -41,6 +45,10 @@ export type CurationFields = {
   email: string;
   sourceUrl: string;
   verificationDate: string;
+  /** Reputación adicional por plataforma; incluye la de `platform` cuando existe. Ver `parseMultiPlatformReputation`. */
+  multiPlatformReputation: MultiPlatformReputationEntry[];
+  /** Categorías oficiales adicionales que el negocio también cumple según sus servicios reales; no incluye `category`. */
+  additionalCategories: string[];
 };
 
 export type CurationIssue = {
@@ -107,7 +115,7 @@ const CATEGORY_BY_KEY: Record<string, string> = {
   'carpas y mobiliario': 'Carpas y mobiliario',
 };
 
-const CATEGORY_CODE: Record<string, string> = {
+export const CATEGORY_CODE: Record<string, string> = {
   Lugar: '01',
   'Comida y Bebida': '02',
   Música: '03',
@@ -143,10 +151,12 @@ const FORMALITY_BY_KEY: Record<string, string> = {
   'no verificado': 'No verificado',
 };
 
+// Los portales de bodas colombianos (Matrimonio.com.co, Zankyou.com.co, Bodas.com.co) se
+// retiraron el 2026-09-20: The Knot Worldwide cerró su operación en Colombia y hoy los dominios
+// no resuelven o redirigen a un aviso de cierre. Una reputación atribuida a ellos no puede ser
+// real, así que aceptarla solo abriría la puerta a un dato inventado.
 const PLATFORM_BY_KEY: Record<string, string> = {
   google: 'Google',
-  'matrimonios.com.co': 'Matrimonios.com.co',
-  'bodas.com.co': 'Bodas.com.co',
   tripadvisor: 'TripAdvisor',
   booking: 'Booking',
   'booking.com': 'Booking',
@@ -155,6 +165,15 @@ const PLATFORM_BY_KEY: Record<string, string> = {
   didi: 'DiDi',
   'didi food': 'DiDi',
 };
+
+/**
+ * Lista blanca real, no solo "que no sea Instagram". Bug encontrado en producción: el agente citó
+ * "Cybo" (un directorio agregador pensado para ser scrapeado, no una plataforma de reseñas primaria)
+ * y el validador lo aceptó porque solo bloqueaba Instagram por nombre. Cualquier plataforma fuera de
+ * esta lista (Cybo, TodosNegocios, PaginasAmarillas, directorios genéricos, etc.) no cuenta como
+ * reputación verificable, sin importar qué tan reales parezcan sus cifras.
+ */
+const RECOGNIZED_REPUTATION_PLATFORMS = new Set(Object.values(PLATFORM_BY_KEY));
 
 const FREE_EMAIL_DOMAINS = new Set([
   'gmail.com', 'googlemail.com', 'hotmail.com', 'outlook.com', 'live.com',
@@ -198,6 +217,73 @@ function parseReviewCount(value: string): number | null | undefined {
   if (!/^\d+$/.test(value)) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+/**
+ * Booking.com publica su puntuación sobre 10, no sobre 5 como Google/TripAdvisor/Facebook/Rappi/DiDi
+ * (confirmado en producción: el agente reportó "8.3" real y correcto para Booking, y el parser de 0-5
+ * lo invalidaba). Si el valor no es válido en escala 0-5 pero SÍ es un número entre 5 y 10 para
+ * Booking, se interpreta como escala 0-10 y se convierte, en vez de rechazar un dato real por un
+ * problema de escala.
+ */
+function parsePlatformRating(rawRating: string, platform: string): number | null | undefined {
+  const rating = parseRating(rawRating);
+  if (rating !== undefined) return rating;
+  if (normalizeKey(platform) !== 'booking') return undefined;
+  const numeric = Number(rawRating.replace(',', '.'));
+  if (!Number.isFinite(numeric) || numeric <= 5 || numeric > 10) return undefined;
+  return Math.round((numeric / 2) * 10) / 10;
+}
+
+/**
+ * Formato: "Plataforma:Calificación:Reseñas;Plataforma:Calificación:Reseñas;...", o "Sin dato" si no
+ * hay reputación adicional. Cada entrada debe tener los tres campos completos y válidos; una entrada
+ * mal formada invalida toda la columna en vez de descartarse en silencio, para no esconder un dato
+ * a medias como si fuera una lista limpia.
+ */
+export function parseMultiPlatformReputation(value: string): MultiPlatformReputationEntry[] | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || normalizeKey(trimmed) === 'sin dato') return [];
+  const entries: MultiPlatformReputationEntry[] = [];
+  for (const chunk of trimmed.split(';')) {
+    const part = chunk.trim();
+    if (!part) continue;
+    const segments = part.split(':');
+    if (segments.length !== 3) return undefined;
+    const [rawPlatform, rawRating, rawReviews] = segments.map(segment => segment.trim());
+    const platformName = PLATFORM_BY_KEY[normalizeKey(rawPlatform)] ?? rawPlatform;
+    if (!rawPlatform || !RECOGNIZED_REPUTATION_PLATFORMS.has(platformName)) return undefined;
+    const rating = parsePlatformRating(rawRating, rawPlatform);
+    const reviews = parseReviewCount(rawReviews);
+    if (rating === undefined || rating === null || reviews === undefined || reviews === null) return undefined;
+    entries.push({ platform: platformName, rating, reviews });
+  }
+  return entries;
+}
+
+/**
+ * Formato: "Categoría;Categoría;..." con las 10 categorías oficiales, o "Sin dato"/"Ninguna" si el
+ * negocio no ofrece servicios de otras categorías. No debe repetir la categoría principal (`category`,
+ * columna 2): un hotel que es "Lugar" y ADEMÁS ofrece catering listaría "Comida y Bebida" aquí, no
+ * "Lugar" de nuevo.
+ */
+export function parseAdditionalCategories(value: string, primaryCategory: string): string[] | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || normalizeKey(trimmed) === 'sin dato' || normalizeKey(trimmed) === 'ninguna') return [];
+  const seen = new Set<string>();
+  const categories: string[] = [];
+  for (const chunk of trimmed.split(';')) {
+    const part = chunk.trim();
+    if (!part) continue;
+    const category = CATEGORY_BY_KEY[normalizeKey(part)];
+    if (!category) return undefined;
+    if (category === primaryCategory) return undefined;
+    const key = normalizeKey(category);
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    categories.push(category);
+  }
+  return categories;
 }
 
 function normalizePhone(value: string): string | undefined {
@@ -311,10 +397,10 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
   const scale = SCALE_BY_KEY[normalizeKey(valueAt(cells, 6))];
   const formality = FORMALITY_BY_KEY[normalizeKey(valueAt(cells, 7))];
   const ratingValue = valueAt(cells, 8);
-  const rating = parseRating(ratingValue);
   const reviewValue = valueAt(cells, 9);
   const reviewCount = parseReviewCount(reviewValue);
   const platform = PLATFORM_BY_KEY[normalizeKey(valueAt(cells, 10))] ?? valueAt(cells, 10);
+  const rating = parsePlatformRating(ratingValue, platform);
   const curationLevel = valueAt(cells, 11).toUpperCase();
   const curationReason = valueAt(cells, 12);
   const phone = normalizePhone(valueAt(cells, 13));
@@ -322,6 +408,10 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
   const email = normalizeEmail(valueAt(cells, 15));
   const sourceUrl = valueAt(cells, 16);
   const verificationDate = valueAt(cells, 17);
+  const multiPlatformValue = valueAt(cells, 18);
+  const multiPlatformReputation = parseMultiPlatformReputation(multiPlatformValue);
+  const additionalCategoriesValue = valueAt(cells, 19);
+  const additionalCategories = category === undefined ? undefined : parseAdditionalCategories(additionalCategoriesValue, category);
 
   if (!/^[A-Z]{3}-\d{2}-\d{3}$/.test(id)) issues.push(issue(line, 'invalid_id', 'El ID debe tener el formato COD-CC-###.'));
   if (category === undefined) issues.push(issue(line, 'invalid_category', 'La categoría no pertenece a las 10 categorías oficiales.'));
@@ -334,7 +424,7 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
   if (!formality) issues.push(issue(line, 'invalid_formality', 'Formalidad no tiene un valor permitido.'));
   if (rating === undefined) issues.push(issue(line, 'invalid_rating', 'La calificación debe ser una cifra exacta entre 4.5 y 5.0 con un decimal.'));
   if (reviewCount === undefined) issues.push(issue(line, 'invalid_review_count', 'Nº Reseñas debe ser un entero exacto sin separadores.'));
-  if (!platform || normalizeKey(platform) === 'instagram') issues.push(issue(line, 'invalid_platform', 'La plataforma de reputación no puede ser Instagram.'));
+  if (!platform || (normalizeKey(platform) !== 'sin dato' && !RECOGNIZED_REPUTATION_PLATFORMS.has(platform))) issues.push(issue(line, 'invalid_platform', `La plataforma de reputación debe ser una de: ${[...RECOGNIZED_REPUTATION_PLATFORMS].join(', ')}, o "Sin dato". No cuentan directorios agregadores (Cybo, TodosNegocios, PaginasAmarillas, etc.) ni Instagram.`));
   if (!['A', 'B'].includes(curationLevel)) issues.push(issue(line, 'invalid_curation_level', 'Nivel Curaduría debe ser A o B.'));
   if (!curationReason || normalizeKey(curationReason) === 'sin dato') issues.push(issue(line, 'missing_curation_reason', 'Por qué pasa la Curaduría debe explicar reputación y capacidad para eventos.'));
   if (phone === undefined) issues.push(issue(line, 'invalid_phone', 'Teléfono debe ser un único número colombiano normalizado o Sin dato.'));
@@ -342,8 +432,10 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
   if (email === undefined) issues.push(issue(line, 'invalid_email', 'Correo Electronico debe ser un correo válido o Sin dato.'));
   if (!isDirectSourceUrl(sourceUrl)) issues.push(issue(line, 'invalid_source_url', 'Fuente URL debe ser una URL HTTP(S) directa de la ficha, no una búsqueda.'));
   if (!isValidDate(verificationDate)) issues.push(issue(line, 'invalid_verification_date', 'Fecha Verificación debe tener formato AAAA-MM-DD y ser una fecha válida.'));
+  if (multiPlatformReputation === undefined) issues.push(issue(line, 'invalid_multiplatform_reputation', 'Reputación Multiplataforma debe ser "Sin dato" o una lista "Plataforma:Calificación:Reseñas" separada por ";".'));
+  if (category !== undefined && additionalCategories === undefined) issues.push(issue(line, 'invalid_additional_categories', 'Categorías Adicionales debe ser "Sin dato" o una lista de categorías oficiales distintas a la principal, separadas por ";", sin repetir.'));
 
-  if (rating !== undefined && reviewCount !== undefined && category !== undefined && segment && zone && scale && formality && phone && instagram && email) {
+  if (rating !== undefined && reviewCount !== undefined && category !== undefined && segment && zone && scale && formality && phone && instagram && email && multiPlatformReputation !== undefined && additionalCategories !== undefined) {
     const normalizedFields: CurationFields = {
       id,
       displayName,
@@ -363,18 +455,31 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
       email,
       sourceUrl,
       verificationDate,
+      multiPlatformReputation,
+      additionalCategories,
     };
     const providerType = inferProviderType(normalizedFields);
     const contactChannel = inferContactChannel(normalizedFields);
-    const minimumReviews = providerType === 1 ? 50 : 15;
+    // Estándar único sin importar el Tipo: 4.5 estrellas y 30 reseñas mínimas en UNA plataforma.
+    // Alternativa: reputación repartida en varias plataformas suma si ninguna sola alcanza el mínimo.
+    // Nivel A/B sigue existiendo como categoría informativa por volumen (A = 50+ en una plataforma).
+    const minimumReviews = 30;
+    const combinedMinPlatforms = 2;
+    const combinedMinReviews = 60;
+    const qualifyingPlatforms = multiPlatformReputation.filter(entry => entry.rating >= 4.5);
+    const combinedReviews = qualifyingPlatforms.reduce((sum, entry) => sum + entry.reviews, 0);
+    const combinedQualifies = qualifyingPlatforms.length >= combinedMinPlatforms && combinedReviews >= combinedMinReviews;
+    const meetsPrimaryThreshold = reviewCount !== null && reviewCount >= minimumReviews;
     const expectedLevel = reviewCount !== null && reviewCount >= 50 ? 'A' : 'B';
-    if (reviewCount !== null && reviewCount < minimumReviews) issues.push(issue(line, 'insufficient_reviews', `Tipo ${providerType} requiere al menos ${minimumReviews} reseñas exactas.`));
+    // reviewCount === null es "Sin dato" legítimo (se maneja abajo como pending_reputation_review);
+    // insufficient_reviews es solo para cuando SÍ hay una cifra real pero no alcanza el mínimo.
+    if (reviewCount !== null && !meetsPrimaryThreshold && !combinedQualifies) {
+      issues.push(issue(line, 'insufficient_reviews', `Se requieren al menos ${minimumReviews} reseñas exactas en una plataforma, o ${combinedMinReviews} reseñas combinadas entre ${combinedMinPlatforms} o más plataformas con calificación 4.5 o más.`));
+    }
     if (curationLevel !== expectedLevel) issues.push(issue(line, 'invalid_curation_level_for_threshold', `Nivel ${expectedLevel} no coincide con el volumen de reseñas.`));
-    // El Nivel B reservado al Tipo 2 solo tiene sentido cuando sí conocemos el número de reseñas.
-    else if (reviewCount !== null && curationLevel === 'B' && providerType !== 2) issues.push(issue(line, 'invalid_curation_level_for_threshold', `Nivel B no aplica al Tipo ${providerType}.`));
-    // Prospecto real pero sin reputación pública confirmada: se conserva y se marca para revisión
-    // manual en vez de rechazarse con un motivo de formato que no corresponde.
-    else if (rating === null || reviewCount === null) issues.push(issue(line, 'pending_reputation_review', 'Requiere revisión: el negocio y su contacto están confirmados, pero la calificación o las reseñas no pudieron verificarse.'));
+    // Prospecto real pero sin reputación pública confirmada en una sola plataforma ni combinada: se
+    // conserva y se marca para revisión manual en vez de rechazarse con un motivo de formato.
+    else if (!meetsPrimaryThreshold && !combinedQualifies && (rating === null || reviewCount === null)) issues.push(issue(line, 'pending_reputation_review', 'Requiere revisión: el negocio y su contacto están confirmados, pero la calificación o las reseñas no pudieron verificarse.'));
     if (rating !== null && rating < 4.5) issues.push(issue(line, 'low_rating', 'La calificación mínima de curaduría es 4.5.'));
     const reasonKey = normalizeKey(curationReason);
     // La justificación solo debe repetir los datos que EXISTEN. Un prospecto sin reputación pública
@@ -382,9 +487,20 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
     const reasonHasRating = rating === null || curationReason.replace(',', '.').includes(rating.toFixed(1));
     const reasonHasReviews = reviewCount === null || new RegExp(`(?:^|\\D)${reviewCount}(?:\\D|$)`).test(curationReason.replace(/[.,]/g, ' '));
     const reasonHasPlatform = normalizeKey(platform) === 'sin dato' || reasonKey.includes(normalizeKey(platform));
-    if (!reasonHasRating || !reasonHasReviews || !reasonHasPlatform) issues.push(issue(line, 'invalid_curation_reason', 'La justificación debe conservar calificación, reseñas y plataforma de la evidencia.'));
-    // Un prospecto sin reputación confirmada debe declararlo explícitamente en la justificación.
-    if ((rating === null || reviewCount === null) && !/(sin dato|no se pudo|requiere revisi|no est[áa] public|sin rese|falta)/i.test(curationReason)) {
+    // Solo exige la mención de "reputación combinada" cuando ESE es el único motivo por el que la
+    // fila pasa (la principal no alcanza el mínimo por sí sola). Si la plataforma principal ya
+    // alcanza el mínimo, que además existan otras plataformas que también calificarían para el modo
+    // combinado no debe exigir nada extra en la justificación (bug real: rechazaba "Casa Tabor",
+    // que ya pasaba con Google solo, por no mencionar "reputación combinada").
+    const passesOnlyByCombination = !meetsPrimaryThreshold && combinedQualifies;
+    const reasonHasCombinedDisclosure = !passesOnlyByCombination || /(combinad|multiplataforma|varias plataformas)/i.test(curationReason);
+    const reasonHasCombinedTotal = !passesOnlyByCombination || new RegExp(`(?:^|\\D)${combinedReviews}(?:\\D|$)`).test(curationReason.replace(/[.,]/g, ' '));
+    if (!reasonHasRating || !reasonHasReviews || !reasonHasPlatform || !reasonHasCombinedDisclosure || !reasonHasCombinedTotal) {
+      issues.push(issue(line, 'invalid_curation_reason', 'La justificación debe conservar calificación, reseñas y plataforma de la evidencia (y el total combinado si aplica reputación multiplataforma).'));
+    }
+    // Un prospecto sin reputación confirmada (y que tampoco pasa por combinación multiplataforma)
+    // debe declararlo explícitamente en la justificación.
+    if (!combinedQualifies && (rating === null || reviewCount === null) && !/(sin dato|no se pudo|requiere revisi|no est[áa] public|sin rese|falta)/i.test(curationReason)) {
       issues.push(issue(line, 'missing_review_disclosure', 'Cuando la calificación o las reseñas son "Sin dato", la justificación debe decir explícitamente qué falta por confirmar.'));
     }
     if (contactChannel === 'email' && normalizeKey(email) === 'sin dato') issues.push(issue(line, 'missing_email_contact', 'Las empresas clasificadas para correo deben tener un correo corporativo verificable.'));
@@ -403,12 +519,12 @@ export function parseCurationTsv(input: string): ParsedCurationBatch {
   let lines = text.split('\n');
   while (lines.at(-1) === '') lines.pop();
   if (lines[0].trim() === '```' && lines.at(-1)?.trim() === '```') lines = lines.slice(1, -1);
-  if (!lines.length || !lines[0].trim()) return { rows: [], fatalErrors: [issue(1, 'missing_header', 'El TSV necesita la línea de encabezados de 18 columnas.')] };
+  if (!lines.length || !lines[0].trim()) return { rows: [], fatalErrors: [issue(1, 'missing_header', `El TSV necesita la línea de encabezados de ${CURATION_HEADERS.length} columnas.`)] };
 
   const headerCells = lines[0].split('\t').map(cleanText);
   const headerKeys = headerCells.map(normalizeKey);
   const headerValid = headerCells.length === CURATION_HEADERS.length && headerKeys.every((header, index) => header === EXPECTED_HEADER_KEYS[index]);
-  if (!headerValid) return { rows: [], fatalErrors: [issue(1, 'invalid_header', `El encabezado debe contener exactamente las 18 columnas de curaduría, en el orden definido.`)] };
+  if (!headerValid) return { rows: [], fatalErrors: [issue(1, 'invalid_header', `El encabezado debe contener exactamente las ${CURATION_HEADERS.length} columnas de curaduría, en el orden definido.`)] };
 
   const rows: ParsedCurationRow[] = [];
   for (let index = 1; index < lines.length; index += 1) {
@@ -421,7 +537,7 @@ export function parseCurationTsv(input: string): ParsedCurationBatch {
     const rawCells = rawLine.split('\t');
     const rawRecord = Object.fromEntries(CURATION_HEADERS.map((header, position) => [header, rawCells[position] ?? '']));
     if (rawCells.length !== CURATION_HEADERS.length) {
-      rows.push({ line, rawLine, rawCells, rawRecord, issues: [issue(line, 'column_count', `La fila tiene ${rawCells.length} columnas; debe tener exactamente 18.`)] });
+      rows.push({ line, rawLine, rawCells, rawRecord, issues: [issue(line, 'column_count', `La fila tiene ${rawCells.length} columnas; debe tener exactamente ${CURATION_HEADERS.length}.`)] });
       continue;
     }
     rows.push(normalizeRow(rawCells, line, rawLine, rawRecord));

@@ -9,9 +9,10 @@ const data = await getDashboard();
     <header class="page-header"><div><p class="eyebrow">Lote y evidencia</p><h1>Proveedores candidatos</h1><p class="page-intro">Revisa primero la evidencia pública. El clic o el formulario no cambian aprobación automáticamente.</p></div><a class="primary-button" href="#importar"><svg viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg>Importar lote</a></header>
     {!data.connected && <div class="notice"><span class="notice-dot"></span><span><strong>Modo demostración.</strong> Estos registros muestran la interfaz; conecta PostgreSQL para operar datos reales.</span></div>}
     <div class="toolbar"><label class="search"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="provider-search" type="search" placeholder="Buscar proveedor, ciudad o categoría" /></label><select class="filter-select" id="status-filter" aria-label="Filtrar por estado"><option value="all">Todos los estados</option><option value="candidate">Candidatos</option><option value="under_review">En revisión</option><option value="approved">Aprobados</option><option value="rejected">Rechazados</option></select><select class="filter-select" id="channel-filter" aria-label="Filtrar por canal"><option value="all">Todos los canales</option><option value="email">Correo corporativo</option><option value="whatsapp">WhatsApp</option></select></div>
-    <section class="panel table-panel" id="importar"><div class="panel-head"><span><strong>Proveedores encontrados</strong> · {data.providers.length} visibles</span><span>Ordenados por última actividad</span></div><div class="table-wrap"><table class="data-table" id="providers-table"><thead><tr><th>Proveedor</th><th>Ciudad / categoría</th><th>Calificación</th><th>Canal</th><th>Origen</th><th>Estado</th><th></th></tr></thead><tbody>{data.providers.map((provider) => <tr data-search={`${provider.display_name} ${provider.city} ${provider.category}`.toLowerCase()} data-status={provider.status} data-channel={provider.contact_channel}><td><a class="provider-link" href={`/proveedores/${provider.provider_id}`}>{provider.display_name}</a><div class="muted">ID {provider.provider_id.slice(0, 8)}</div></td><td>{provider.city}<div class="muted">{provider.category}</div></td><td><span class="rating">{provider.rating ?? '—'} <span>★</span></span><div class="muted">{provider.review_count ?? '—'} reseñas</div></td><td><span class={`channel-badge channel-${provider.contact_channel}`}>{provider.contact_channel === 'email' ? 'Correo' : 'WhatsApp'}</span></td><td class="muted">{provider.discovery_source ?? '—'}</td><td><StatusBadge status={provider.status} /></td><td><a class="text-link" href={`/proveedores/${provider.provider_id}`}>Abrir</a></td></tr>)}</tbody></table></div></section>
+    <section class="panel table-panel" id="importar"><div class="panel-head"><span><strong>Proveedores encontrados</strong> · {data.providers.length} visibles</span><span>Ordenados por última actividad</span></div><div class="table-wrap"><table class="data-table" id="providers-table"><thead><tr><th>Proveedor</th><th>Ciudad / categoría</th><th>Calificación</th><th>Canal</th><th>Origen</th><th>Estado</th><th></th></tr></thead><tbody>{data.providers.map((provider) => <tr data-search={`${provider.display_name} ${provider.city} ${provider.category}`.toLowerCase()} data-status={provider.status} data-channel={provider.contact_channel}><td><a class="provider-link" href={`/proveedores/${provider.provider_id}`}>{provider.display_name}</a><div class="muted">ID {provider.provider_id.slice(0, 8)}</div></td><td>{provider.city}<div class="muted">{provider.category}{provider.additional_categories?.length ? ` · +${provider.additional_categories.join(', ')}` : ''}</div></td><td><span class="rating">{provider.rating ?? '—'} <span>★</span></span><div class="muted">{provider.review_count ?? '—'} reseñas{provider.platform_count > 1 && ` · +${provider.platform_count - 1} plataforma${provider.platform_count - 1 === 1 ? '' : 's'} más`}</div></td><td><span class={`channel-badge channel-${provider.contact_channel}`}>{provider.contact_channel === 'email' ? 'Correo' : 'WhatsApp'}</span></td><td class="muted">{provider.discovery_source ?? '—'}</td><td><StatusBadge status={provider.status} /></td><td><a class="text-link" href={`/proveedores/${provider.provider_id}`}>Abrir</a></td></tr>)}</tbody></table></div></section>
     <section class="agent-card" id="agente-gemini"><div class="agent-copy"><div class="agent-kicker"><span class="agent-pulse"></span>Gemini · agente de curaduría</div><h2>Investigar un lote desde la aplicación</h2><p>Escoge ciudad y categoría para lanzar la búsqueda. Gemini busca evidencia pública actual, separa empresas para correo corporativo de empresas para WhatsApp y devuelve una vista previa antes de importar.</p><form id="gemini-form" class="agent-form"><label>Ciudad<select class="form-input" name="city" required><option value="">Selecciona una ciudad</option><option>Bogotá</option><option>Medellín</option><option>Cali</option><option>Barranquilla</option><option>Cartagena</option><option>Bucaramanga</option><option>Pereira</option><option>Manizales</option><option>Santa Marta</option><option>Armenia</option><option>Villavicencio</option></select></label><label>Categoría<select class="form-input" name="category" required><option value="">Selecciona una categoría</option><option>Música</option><option>Lugar</option><option>Comida y Bebida</option><option>Servicios Especializados</option><option>Entretenimiento</option><option>Decoración temática</option><option>Fotografía y Video</option><option>Invitación digital</option><option>Menaje y mantelería</option><option>Carpas y mobiliario</option></select></label><label>Instrucciones adicionales <span class="muted">opcional</span><textarea class="agent-textarea" name="instructions" placeholder="Ej. prioriza negocios con portafolio para bodas y cobertura en el área metropolitana"></textarea></label><button class="primary-button" type="submit">Lanzar búsqueda con Gemini</button></form><p class="agent-status" id="gemini-status" role="status"></p></div><div class="agent-result" id="gemini-result" hidden><div class="result-head"><strong>Vista previa del lote</strong><span id="gemini-count"></span></div><p id="gemini-summary" class="muted"></p><div class="channel-summary" id="gemini-channels" hidden><p><strong id="gemini-email-count"></strong><span id="gemini-email-names"></span></p><p><strong id="gemini-whatsapp-count"></strong><span id="gemini-whatsapp-names"></span></p></div><textarea id="gemini-tsv" aria-label="TSV generado por Gemini"></textarea><div class="result-actions"><button class="primary-button" id="gemini-import" type="button">Confirmar e importar</button><button class="secondary-button" id="gemini-copy" type="button">Copiar TSV</button></div><p class="muted">La validación conserva los rechazos y deja los aceptados como candidatos. Los correos se guardan sin consentimiento de marketing; WhatsApp usa el móvil público. No se envían mensajes.</p></div></section>
-    <section class="import-card"><div><h2>Importar desde curaduría</h2><p>Pega el bloque TSV de 18 columnas generado por el prompt v2.8. El importador deduplica por fuente y conserva la evidencia original.</p></div><form action="/api/providers/import" method="post"><textarea name="tsv" placeholder="Pega aquí el TSV…" aria-label="Bloque TSV"></textarea><button class="primary-button" type="submit">Validar lote</button></form></section>
+    <section class="harvest-card" id="cosecha"><div class="harvest-copy"><div class="agent-kicker"><span class="agent-pulse"></span>Google Places · cosecha directa</div><h2>Traer proveedores con reputación ya verificada</h2><p>Consulta la categoría en la ciudad y devuelve negocios que ya traen calificación, reseñas y teléfono de la API de Google. Revisa la lista, marca los que sirvan y genera el TSV: no interviene el agente, así que ningún dato viene inventado.</p><form id="harvest-form" class="agent-form"><label>Ciudad<select class="form-input" name="city" required><option value="">Selecciona una ciudad</option><option>Bogotá</option><option>Medellín</option><option>Cali</option><option selected>Barranquilla</option><option>Cartagena</option><option>Bucaramanga</option><option>Santa Marta</option></select></label><label>Categoría<select class="form-input" name="category" required><option value="">Selecciona una categoría</option><option>Lugar</option><option>Comida y Bebida</option><option>Música</option><option>Servicios Especializados</option><option>Entretenimiento</option><option>Decoración temática</option><option>Fotografía y Video</option><option>Invitación digital</option><option>Menaje y mantelería</option><option>Carpas y mobiliario</option></select></label><button class="primary-button" type="submit">Cosechar</button></form><p class="agent-status" id="harvest-status" role="status"></p></div><div class="harvest-result" id="harvest-result" hidden><div class="result-head"><strong>Candidatos encontrados</strong><span id="harvest-count"></span></div><div class="harvest-tools"><label class="harvest-threshold">Calificación mínima<input class="form-input" id="harvest-min-rating" type="number" min="0" max="5" step="0.1" value="4.5" /></label><label class="harvest-threshold">Reseñas mínimas<input class="form-input" id="harvest-min-reviews" type="number" min="0" step="1" value="30" /></label><button class="secondary-button" id="harvest-reset-threshold" type="button">Estándar</button><button class="secondary-button" id="harvest-select-all" type="button">Marcar visibles</button><button class="secondary-button" id="harvest-clear" type="button">Desmarcar</button></div><div class="harvest-list" id="harvest-list"></div><p class="muted harvest-visible" id="harvest-visible-count"></p><p class="muted harvest-warn">Revisa la pertinencia antes de marcar: la consulta por servicio arrastra comercio adyacente, y un negocio con buena calificación puede no prestar el servicio de la categoría. Bajar el umbral sirve para explorar, pero la curaduría sigue exigiendo 4.5 y 30 reseñas: lo que quede por debajo se importa como «requiere revisión».</p><div class="result-actions"><button class="primary-button" id="harvest-generate" type="button">Generar TSV de los marcados</button><button class="secondary-button" id="harvest-verify" type="button">Verificar con el agente</button><span class="muted" id="harvest-selected-count"></span></div><p class="muted harvest-warn">Verificar manda los marcados al agente para que confirme si prestan el servicio de la categoría y busque su correo e Instagram. Descarta los que no sirvan y tarda unos minutos; la calificación, las reseñas y el teléfono siguen viniendo de Places y el agente no los toca.</p></div></section>
+    <section class="import-card"><div><h2>Importar desde curaduría</h2><p>Pega el bloque TSV de 20 columnas generado por el prompt v2.10. El importador deduplica por fuente y conserva la evidencia original.</p></div><form action="/api/providers/import" method="post"><textarea name="tsv" placeholder="Pega aquí el TSV…" aria-label="Bloque TSV"></textarea><button class="primary-button" type="submit">Validar lote</button></form></section>
   </div>
 </AppLayout>
 <script>
@@ -213,10 +214,10 @@ const data = await getDashboard();
     const rows = lines.slice(1);
     rows.forEach((rawLine, index) => {
       const cells = rawLine.split('\t').map(value => value.trim());
-      if (cells.length < 18) return;
+      if (cells.length < 20) return;
       const line = index + 2;
       const rejected = rejectedByLine.get(line);
-      const [id, name, category, , city, zone, scale, , rating, reviewCount, platform, level, reason, phone, , email, sourceUrl, verificationDate] = cells;
+      const [id, name, category, , city, zone, scale, , rating, reviewCount, platform, level, reason, phone, , email, sourceUrl, verificationDate, multiPlatformRaw, additionalCategoriesRaw] = cells;
       const card = document.createElement('article');
       card.className = 'candidate-card';
       card.dataset.state = rejected ? 'rejected' : 'accepted';
@@ -225,7 +226,8 @@ const data = await getDashboard();
       const identity = document.createElement('div');
       appendText(identity, 'span', 'candidate-state', rejected ? 'Requiere revisión' : 'Candidato listo');
       appendText(identity, 'h3', 'candidate-name', name);
-      appendText(identity, 'p', 'candidate-context', `${category} · ${city}`);
+      const additionalCategories = (additionalCategoriesRaw || '').split(';').map(value => value.trim()).filter(value => value && value.toLowerCase() !== 'sin dato');
+      appendText(identity, 'p', 'candidate-context', `${category}${additionalCategories.length ? ` +${additionalCategories.join(', ')}` : ''} · ${city}`);
       top.append(identity);
       const ratingBlock = document.createElement('div');
       ratingBlock.className = 'candidate-rating';
@@ -233,6 +235,28 @@ const data = await getDashboard();
       appendText(ratingBlock, 'small', '', `${reviewCount || '0'} reseñas`);
       top.append(ratingBlock);
       card.append(top);
+
+      const otherPlatforms = (multiPlatformRaw || '')
+        .split(';')
+        .map(entry => entry.trim())
+        .filter(entry => entry && entry.toLowerCase() !== 'sin dato')
+        .map(entry => {
+          const [entryPlatform, entryRating, entryReviews] = entry.split(':').map(part => part?.trim());
+          return entryPlatform && entryRating && entryReviews ? { entryPlatform, entryRating, entryReviews } : null;
+        })
+        .filter((entry): entry is { entryPlatform: string; entryRating: string; entryReviews: string } => Boolean(entry))
+        .filter(entry => entry.entryPlatform.toLowerCase() !== (platform || '').toLowerCase());
+      if (otherPlatforms.length) {
+        const platformsRow = document.createElement('div');
+        platformsRow.className = 'candidate-platforms';
+        otherPlatforms.forEach(({ entryPlatform, entryRating, entryReviews }) => {
+          const badge = document.createElement('span');
+          badge.className = 'platform-badge';
+          badge.textContent = `${entryPlatform} ★${entryRating} (${entryReviews})`;
+          platformsRow.append(badge);
+        });
+        card.append(platformsRow);
+      }
 
       const facts = document.createElement('div');
       facts.className = 'candidate-facts';
@@ -371,9 +395,192 @@ const data = await getDashboard();
     if (agentStatus) agentStatus.textContent = response.ok && body.ok ? `Importación completada: ${body.imported} proveedores.` : `Importación detenida: ${body.error ?? `${body.accepted ?? 0} válidos, ${body.rejected ?? 0} rechazados.`}`;
   });
   copyButton?.addEventListener('click', async () => { if (agentTsv?.value) { await navigator.clipboard.writeText(agentTsv.value); if (agentStatus) agentStatus.textContent = 'TSV copiado al portapapeles.'; } });
+  // ---- Cosecha desde Google Places ----
+  type HarvestCandidate = {
+    placeId: string; name: string; type: string | null; rating: number | null; reviews: number | null;
+    phone: string | null; website: string | null; mapsUrl: string | null; address: string | null;
+    contactable: boolean; meetsThreshold: boolean;
+  };
+
+  const harvestForm = document.querySelector<HTMLFormElement>('#harvest-form');
+  const harvestStatus = document.querySelector<HTMLElement>('#harvest-status');
+  const harvestResult = document.querySelector<HTMLElement>('#harvest-result');
+  const harvestList = document.querySelector<HTMLElement>('#harvest-list');
+  const harvestCount = document.querySelector<HTMLElement>('#harvest-count');
+  const harvestSelectedCount = document.querySelector<HTMLElement>('#harvest-selected-count');
+  const harvestVisibleCount = document.querySelector<HTMLElement>('#harvest-visible-count');
+  const harvestMinRating = document.querySelector<HTMLInputElement>('#harvest-min-rating');
+  const harvestMinReviews = document.querySelector<HTMLInputElement>('#harvest-min-reviews');
+  // Estandar de curaduria. El operador puede bajar el filtro para explorar, pero el validador
+  // sigue midiendo contra estos valores, asi que lo que quede por debajo entrara como
+  // "requiere revision" y no como candidato aceptado.
+  const CURATION_MIN_RATING = 4.5;
+  const CURATION_MIN_REVIEWS = 30;
+  const harvestGenerate = document.querySelector<HTMLButtonElement>('#harvest-generate');
+  const importTextarea = document.querySelector<HTMLTextAreaElement>('.import-card textarea[name="tsv"]');
+
+  let harvestCandidates: HarvestCandidate[] = [];
+  const harvestSelected = new Set<string>();
+  let harvestCity = '';
+  let harvestCategory = '';
+
+  const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  function escapeHtml(value: string) {
+    return value.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character] ?? character);
+  }
+
+  function refreshSelectedCount() {
+    if (harvestSelectedCount) harvestSelectedCount.textContent = harvestSelected.size ? `${harvestSelected.size} marcado${harvestSelected.size === 1 ? '' : 's'}` : 'Ninguno marcado';
+    if (harvestGenerate) harvestGenerate.disabled = harvestSelected.size === 0;
+    const verifyButton = document.querySelector<HTMLButtonElement>('#harvest-verify');
+    if (verifyButton) verifyButton.disabled = harvestSelected.size === 0;
+  }
+
+  function currentThreshold() {
+    const rating = Number(harvestMinRating?.value);
+    const reviews = Number(harvestMinReviews?.value);
+    return {
+      rating: Number.isFinite(rating) ? rating : 0,
+      reviews: Number.isFinite(reviews) ? reviews : 0,
+    };
+  }
+
+  function passesThreshold(candidate: HarvestCandidate) {
+    const { rating, reviews } = currentThreshold();
+    return (candidate.rating ?? 0) >= rating && (candidate.reviews ?? 0) >= reviews;
+  }
+
+  function meetsCurationStandard(candidate: HarvestCandidate) {
+    return (candidate.rating ?? 0) >= CURATION_MIN_RATING && (candidate.reviews ?? 0) >= CURATION_MIN_REVIEWS;
+  }
+
+  function renderHarvest() {
+    if (!harvestList) return;
+    const visible = harvestCandidates.filter(passesThreshold);
+    if (harvestVisibleCount) {
+      const belowStandard = visible.filter((candidate) => !meetsCurationStandard(candidate)).length;
+      harvestVisibleCount.textContent = visible.length
+        ? `${visible.length} visible${visible.length === 1 ? '' : 's'}${belowStandard ? ` · ${belowStandard} bajo el estándar de curaduría` : ''}`
+        : '';
+    }
+    if (!visible.length) {
+      harvestList.innerHTML = '<p class="muted">Ningun candidato con ese umbral. Baja la calificación o las reseñas mínimas.</p>';
+      refreshSelectedCount();
+      return;
+    }
+    harvestList.innerHTML = visible.map((candidate) => {
+      const reputation = candidate.rating !== null && candidate.reviews !== null
+        ? `${candidate.rating.toFixed(1)} estrellas · ${candidate.reviews} rese&ntilde;as`
+        : 'sin reputaci&oacute;n p&uacute;blica';
+      const contact = [candidate.phone ? escapeHtml(candidate.phone) : '', candidate.website ? 'sitio web' : ''].filter(Boolean).join(' · ') || 'sin contacto';
+      const link = candidate.website || candidate.mapsUrl;
+      const linkHtml = link ? ` — <a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">ficha</a>` : '';
+      const typeHtml = candidate.type ? `<span class="muted"> · ${escapeHtml(candidate.type)}</span>` : '';
+      const standard = meetsCurationStandard(candidate);
+      const flag = standard ? '' : '<span class="hr-flag">requiere revisión</span>';
+      return `<label class="harvest-row${standard ? ' meets' : ''}"><input type="checkbox" value="${escapeHtml(candidate.placeId)}"${harvestSelected.has(candidate.placeId) ? ' checked' : ''} /><span class="hr-main"><span class="hr-top"><strong>${escapeHtml(candidate.name)}</strong>${typeHtml}${flag}</span><span class="hr-meta">${reputation} — ${contact}${linkHtml}</span></span></label>`;
+    }).join('');
+    harvestList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((box) => {
+      box.addEventListener('change', () => {
+        if (box.checked) harvestSelected.add(box.value);
+        else harvestSelected.delete(box.value);
+        refreshSelectedCount();
+      });
+    });
+    refreshSelectedCount();
+  }
+
+  harvestMinRating?.addEventListener('input', renderHarvest);
+  harvestMinReviews?.addEventListener('input', renderHarvest);
+  document.querySelector('#harvest-reset-threshold')?.addEventListener('click', () => {
+    if (harvestMinRating) harvestMinRating.value = String(CURATION_MIN_RATING);
+    if (harvestMinReviews) harvestMinReviews.value = String(CURATION_MIN_REVIEWS);
+    renderHarvest();
+  });
+
+  document.querySelector('#harvest-select-all')?.addEventListener('click', () => {
+    harvestCandidates.filter(passesThreshold).forEach((candidate) => harvestSelected.add(candidate.placeId));
+    renderHarvest();
+  });
+  document.querySelector('#harvest-clear')?.addEventListener('click', () => { harvestSelected.clear(); renderHarvest(); });
+
+  harvestForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = new FormData(harvestForm);
+    harvestCity = String(form.get('city') ?? '');
+    harvestCategory = String(form.get('category') ?? '');
+    if (!harvestCity || !harvestCategory) return;
+    if (harvestStatus) harvestStatus.textContent = 'Consultando Google Places...';
+    harvestSelected.clear();
+    try {
+      const response = await fetch('/api/providers/harvest', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ city: harvestCity, category: harvestCategory }),
+      });
+      const body = await response.json();
+      if (!body.ok) throw new Error(body.error ?? 'No se pudo cosechar.');
+      harvestCandidates = body.candidates as HarvestCandidate[];
+      const meets = harvestCandidates.filter(meetsCurationStandard).length;
+      if (harvestCount) harvestCount.textContent = `${harvestCandidates.length} · ${meets} sobre umbral · ${body.apiCalls} llamadas en ${Math.round(body.durationMs / 100) / 10}s`;
+      if (harvestStatus) harvestStatus.textContent = `${harvestCandidates.length} candidatos en ${harvestCategory} · ${harvestCity}.`;
+      harvestResult?.removeAttribute('hidden');
+      renderHarvest();
+    } catch (error) {
+      if (harvestStatus) harvestStatus.textContent = error instanceof Error ? error.message : 'No se pudo cosechar.';
+    }
+  });
+
+  const harvestVerify = document.querySelector<HTMLButtonElement>('#harvest-verify');
+
+  async function buildTsv(verify: boolean) {
+    if (!harvestSelected.size) return;
+    if (harvestGenerate) harvestGenerate.disabled = true;
+    if (harvestVerify) harvestVerify.disabled = true;
+    if (harvestStatus) {
+      harvestStatus.textContent = verify
+        ? `Verificando ${harvestSelected.size} candidatos con el agente. Puede tardar unos minutos...`
+        : 'Generando TSV...';
+    }
+    try {
+      const response = await fetch('/api/providers/harvest', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ city: harvestCity, category: harvestCategory, placeIds: [...harvestSelected], verify }),
+      });
+      const body = await response.json();
+      if (!body.ok) throw new Error(body.error ?? 'No se pudo generar el TSV.');
+      if (importTextarea) {
+        importTextarea.value = body.tsv;
+        importTextarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        importTextarea.focus();
+      }
+      const partes = [`TSV con ${body.rows} fila${body.rows === 1 ? '' : 's'} listo abajo. Revisalo y pulsa "Validar lote".`];
+      if (body.verification) {
+        const v = body.verification;
+        partes.push(`El agente verifico ${v.verificados}: ${v.pertinentes} pertinentes, ${v.conCorreo} con correo, ${v.conInstagram} con Instagram.`);
+        if (body.unconfirmed) partes.push(`${body.unconfirmed} quedaron marcados para revisar: el agente no pudo confirmar el servicio.`);
+        if (v.error) partes.push(`Aviso de verificacion: ${v.error}.`);
+      }
+      if (body.skipped) partes.push(`${body.skipped} se omitieron por falta de reputacion o URL.`);
+      if (harvestStatus) harvestStatus.textContent = partes.join(' ');
+    } catch (error) {
+      if (harvestStatus) harvestStatus.textContent = error instanceof Error ? error.message : 'No se pudo generar el TSV.';
+    } finally {
+      if (harvestVerify) harvestVerify.disabled = harvestSelected.size === 0;
+      refreshSelectedCount();
+    }
+  }
+
+  harvestGenerate?.addEventListener('click', () => buildTsv(false));
+  harvestVerify?.addEventListener('click', () => buildTsv(true));
+
+  refreshSelectedCount();
+
 </script>
 <style>
   .notice { display:flex; align-items:center; gap:9px; margin:-8px 0 21px; padding:11px 14px; border:1px solid var(--warn-line); border-radius:10px; color:var(--warn); background:var(--warn-bg); font-size:12px; }.notice-dot{width:7px;height:7px;border-radius:50%;background:var(--warn)}.agent-card{display:grid;grid-template-columns:1fr 1.15fr;gap:28px;margin-top:24px;padding:22px;border:1px solid var(--accent);border-radius:14px;background:linear-gradient(120deg,var(--accent-soft),var(--surface-2) 58%)}.agent-kicker{display:flex;align-items:center;gap:7px;color:var(--accent-text);font:600 10px var(--font-mono);letter-spacing:.07em;text-transform:uppercase}.agent-pulse{width:7px;height:7px;border-radius:50%;background:var(--signal);box-shadow:0 0 0 4px var(--signal-bg)}.agent-card h2{margin:11px 0 0;font-family:var(--font-display);font-size:17px;font-weight:600}.agent-card p{max-width:520px;color:var(--text-muted);font-size:12px;line-height:1.55}.agent-form{display:grid;gap:10px;margin-top:17px}.agent-form label{display:grid;gap:6px;color:var(--text);font-size:11px;font-weight:600}.agent-textarea{min-height:66px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;resize:vertical;color:var(--text);background:var(--surface);font-size:12px}.agent-form .primary-button{justify-self:start}.agent-status{min-height:18px;margin-bottom:0;color:var(--accent-text)!important}.agent-result{min-width:0;padding:15px;border:1px solid var(--line);border-radius:11px;background:rgba(0,0,0,.12)}.result-head{display:flex;justify-content:space-between;gap:10px;font-size:12px}.result-head span{color:var(--signal-text);font:10px var(--font-mono)}.channel-summary{display:grid;gap:7px;margin-top:11px;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);font-size:11px}.channel-summary p{margin:0!important;max-width:none}.channel-summary strong{display:inline-block;min-width:142px;color:var(--accent-text)}.agent-result textarea{width:100%;min-height:250px;margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:9px;resize:vertical;color:var(--text);background:var(--surface);font:10px/1.45 var(--font-mono)}.result-actions{display:flex;gap:9px;margin-top:10px}.channel-badge{display:inline-flex;padding:3px 7px;border-radius:999px;font:10px var(--font-mono)}.channel-email{color:var(--accent-text);background:var(--accent-soft)}.channel-whatsapp{color:var(--signal-text);background:var(--signal-bg)}.secondary-button{min-height:38px;padding:0 13px;border:1px solid var(--line-strong);border-radius:9px;color:var(--text);background:var(--surface);font-size:12px;font-weight:600}.import-card{display:grid;grid-template-columns:1fr 1.3fr;gap:28px;margin-top:24px;padding:22px;border:1px dashed var(--line-strong);border-radius:14px;background:var(--surface-2)}.import-card h2{margin:0;font-family:var(--font-display);font-size:15px;font-weight:600}.import-card p{max-width:420px;color:var(--text-muted);font-size:12px;line-height:1.55}.import-card form{display:grid;gap:10px}.import-card textarea{min-height:85px;padding:11px;border:1px solid var(--line);border-radius:10px;resize:vertical;color:var(--text);background:var(--surface);font:12px var(--font-mono)}.import-card .primary-button{justify-self:end}@media(max-width:720px){.agent-card,.import-card{grid-template-columns:1fr}.agent-form .primary-button,.import-card .primary-button{justify-self:stretch}.result-actions{flex-direction:column}.channel-summary strong{min-width:120px}}
+</style>
+<style is:global>
+  .harvest-card{display:grid;grid-template-columns:1fr 1.15fr;gap:28px;margin-top:24px;padding:22px;border:1px solid var(--line-strong);border-radius:14px;background:var(--surface-2)}.harvest-card h2{margin:11px 0 0;font-family:var(--font-display);font-size:17px;font-weight:600}.harvest-card p{max-width:520px;color:var(--text-muted);font-size:12px;line-height:1.55}.harvest-copy{min-width:0}.harvest-result{min-width:0;padding:15px;border:1px solid var(--line);border-radius:11px;background:rgba(0,0,0,.12)}.harvest-tools{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin-top:11px}.harvest-threshold{display:flex;align-items:center;gap:6px;color:var(--text);font-size:11px;font-weight:600}.harvest-threshold input{width:72px;min-height:30px;padding:0 8px;font-size:12px}.hr-flag{padding:1px 6px;border-radius:999px;color:var(--warn);background:var(--warn-bg);font:9px var(--font-mono);white-space:nowrap}.harvest-visible{margin:9px 0 0!important;font:10px var(--font-mono)}.harvest-list{max-height:330px;overflow-y:auto;margin-top:11px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}.harvest-row{display:flex;align-items:flex-start;gap:9px;padding:9px 11px;border-bottom:1px solid var(--line);cursor:pointer}.harvest-row:last-child{border-bottom:0}.harvest-row.meets{background:var(--accent-soft)}.harvest-row input{margin-top:3px;flex:none}.hr-main{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:12px}.hr-top{display:flex;align-items:baseline;gap:5px;min-width:0;flex-wrap:wrap}.hr-top strong{min-width:0;overflow-wrap:anywhere}.hr-top .muted{white-space:nowrap;font-size:10px}.hr-meta{color:var(--text-muted);font:10px var(--font-mono)}.hr-meta a{color:var(--accent-text)}.harvest-warn{margin:10px 0 0!important;font-size:11px}.harvest-card .result-actions{align-items:center}.harvest-card .result-actions .muted{font:10px var(--font-mono)}@media(max-width:720px){.harvest-card{grid-template-columns:1fr}.harvest-card .primary-button{justify-self:stretch}}
 </style>
 <style is:global>
   .agent-card .agent-copy { grid-column: 1; grid-row: 1; min-width: 0; }
@@ -437,6 +644,8 @@ const data = await getDashboard();
   .candidate-rating { display: grid; justify-items: end; gap: 3px; white-space: nowrap; }
   .candidate-rating strong { color: var(--signal-text); font-size: 12px; }
   .candidate-rating small, .candidate-facts small, .candidate-footer small { color: var(--text-subtle); font: 10px var(--font-mono); }
+  .candidate-platforms { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .platform-badge { padding: 3px 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); font: 10px var(--font-mono); color: var(--text-muted); white-space: nowrap; }
   .candidate-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 11px 0; padding: 9px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
   .candidate-facts span { display: grid; gap: 3px; min-width: 0; }
   .candidate-facts strong { overflow: hidden; color: var(--text); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
