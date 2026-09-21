@@ -15,6 +15,39 @@ Sin `DATABASE_URL`, la interfaz usa datos de demostración y sigue permitiendo r
 
 En esta sesión el panel está corriendo en `http://127.0.0.1:4321/` conectado al PostgreSQL remoto. La contraseña del usuario técnico no se guardó en el proyecto; para reiniciar el panel hay que inyectar `DATABASE_URL` desde un gestor de secretos o una variable de entorno segura.
 
+## Separación frontend / backend
+
+El repositorio contiene dos aplicaciones:
+
+| | Dónde vive | Qué sirve | Despliegue |
+|---|---|---|---|
+| **Backend** | raíz del repo | solo `/api/**` y `/t/:token` | EC2, por el workflow de siempre |
+| **Frontend** | `frontend/` | todas las páginas del panel | Vercel |
+
+El frontend no tiene acceso a PostgreSQL ni a ninguna credencial de servicio externa: todo lo pide
+por HTTP a `/api/v1/*` del backend, autenticándose con `BACKEND_SERVICE_TOKEN`.
+
+```bash
+npm run dev                  # backend  -> http://127.0.0.1:4321 (solo API)
+npm run dev --prefix frontend  # panel  -> http://127.0.0.1:4322
+```
+
+El `frontend/.env` necesita `BACKEND_URL` y `BACKEND_SERVICE_TOKEN`. Sin `BACKEND_URL`, el proxy
+responde 503 diciéndolo en vez de fallar en silencio.
+
+### Por qué hay un proxy en el frontend
+
+Los scripts de las páginas llaman a rutas del mismo origen (`/api/ai/curation`, `/api/campaigns`…).
+Con el panel en Vercel esas rutas no existen ahí, así que `frontend/src/pages/api/[...path].ts`
+reenvía cualquier `/api/*` al backend **añadiendo el token del lado del servidor**. Las alternativas
+—llamar al backend desde el navegador o reescribir cada `fetch`— obligan a CORS y dejan el token de
+servicio a la vista en el JavaScript de la página.
+
+### Al separar los dominios
+
+`FRONTEND_URL` en el backend es obligatorio: `/t/:token` registra el clic del correo y redirige al
+formulario, que ya no se sirve desde el backend. Sin esa variable, el proveedor acaba en un 404.
+
 ## PostgreSQL
 
 `sql/schema.sql` crea el esquema `marketplace` de forma idempotente. El esquema ya fue aplicado en la instancia EC2 de marketplace y sus tablas fueron verificadas.

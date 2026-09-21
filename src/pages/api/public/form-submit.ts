@@ -3,45 +3,13 @@ import type { PoolClient } from 'pg';
 import { createHash } from 'node:crypto';
 import { pool } from '../../../lib/db';
 import { hashToken } from '../../../lib/tracking';
+import { findProhibited } from '../../../lib/prohibited-items';
+import { OFFICIAL_CATEGORIES, parseList, parseVolume } from '../../../lib/registration-fields';
 
 function hash(value: string) { return createHash('sha256').update(value).digest(); }
 
 const MAX_PRODUCTS = 10;
 const MAX_SERVICES = 5;
-
-/** Las 10 categorías oficiales de curaduría; nada fuera de esta lista entra como servicio. */
-export const OFFICIAL_CATEGORIES = new Set([
-  'Lugar', 'Comida y Bebida', 'Música', 'Servicios Especializados', 'Entretenimiento',
-  'Decoración temática', 'Fotografía y Video', 'Invitación digital', 'Menaje y mantelería', 'Carpas y mobiliario',
-]);
-
-/**
- * El formulario manda productos y servicios como JSON dentro de un campo oculto. Se sanea aquí y no
- * se confía en los límites del navegador: el envío puede venir de cualquier cliente.
- */
-export function parseList(raw: string, max: number, allowed?: Set<string>): string[] | undefined {
-  if (!raw.trim()) return [];
-  let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { return undefined; }
-  if (!Array.isArray(parsed)) return undefined;
-  const clean: string[] = [];
-  for (const entry of parsed) {
-    if (typeof entry !== 'string') return undefined;
-    const value = entry.replace(/\s+/g, ' ').trim();
-    if (!value || value.length > 60) return undefined;
-    if (allowed && !allowed.has(value)) return undefined;
-    if (!clean.includes(value)) clean.push(value);
-  }
-  return clean.length > max ? undefined : clean;
-}
-
-export function parseVolume(rawMin: string, rawMax: string): { min: number; max: number } | undefined {
-  const min = Number(rawMin);
-  const max = Number(rawMax);
-  if (!Number.isInteger(min) || !Number.isInteger(max)) return undefined;
-  if (min < 1 || max < min || max > 100000) return undefined;
-  return { min, max };
-}
 
 /**
  * Un rechazo de validación a mitad de la transacción tiene que deshacerla: sin esto la conexión
@@ -105,6 +73,10 @@ export const POST: APIRoute = async ({ request, redirect }) => {
       const services = parseList(String(body.get('services') ?? ''), MAX_SERVICES, OFFICIAL_CATEGORIES);
       const volume = parseVolume(String(body.get('volume_min') ?? ''), String(body.get('volume_max') ?? ''));
       if (!products || !products.length) return await rollback(client, new Response(`Indica entre 1 y ${MAX_PRODUCTS} productos.`, { status: 400 }));
+      // La misma regla que aplica el bot: lo que no entra al catálogo tampoco entra por el
+      // formulario. Si solo se comprobara en uno de los dos caminos, bastaría con usar el otro.
+      const vetados = findProhibited(products);
+      if (vetados.length) return await rollback(client, new Response('Hay productos que no podemos listar en el catálogo.', { status: 400 }));
       if (!services || !services.length) return await rollback(client, new Response(`Marca entre 1 y ${MAX_SERVICES} categorías oficiales.`, { status: 400 }));
       if (!volume) return await rollback(client, new Response('El rango de asistentes no es válido.', { status: 400 }));
 

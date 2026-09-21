@@ -1,4 +1,4 @@
-import { parseList, parseVolume, OFFICIAL_CATEGORIES } from '../src/pages/api/public/form-submit.ts';
+import { parseList, parseVolume, OFFICIAL_CATEGORIES } from '../src/lib/registration-fields.ts';
 
 let failed = 0;
 function check(label: string, actual: unknown, expected: unknown) {

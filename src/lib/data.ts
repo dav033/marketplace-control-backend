@@ -1,6 +1,7 @@
 import { demoDashboard, demoProvider } from './demo';
 import { query, pool } from './db';
 import type { DashboardData, Provider, ProviderSource, Registration } from './types';
+import type { Preregistered } from './contract';
 
 export async function getDashboard(): Promise<DashboardData> {
   if (!pool) return demoDashboard();
@@ -77,4 +78,76 @@ export async function getProvider(id: string) {
     ORDER BY observed_reviews DESC NULLS LAST
   `, [id]);
   return { ...provider, sources: sources.rows };
+}
+
+/**
+ * Una respuesta de formulario concreta.
+ *
+ * Se resuelve sobre el mismo lote que alimenta la bandeja en vez de con una consulta propia: así la
+ * ficha y el listado no pueden discrepar, y el modo demostración sigue funcionando igual. Antes esta
+ * búsqueda la hacía la página con un `find` sobre el lote completo; vive aquí para que el front no
+ * tenga que conocer la forma de los datos.
+ */
+export async function getRegistration(id: string) {
+  const data = await getDashboard();
+  return data.registrations.find((entry) => entry.submission_id === id) ?? null;
+}
+
+/**
+ * Candidatos a los que se les puede escribir, para el chat de prueba.
+ *
+ * Devuelve lo que el bot necesita saber antes de abrir la conversación. Es solo lectura: elegir un
+ * candidato aquí no cambia su estado ni le manda nada.
+ */
+export async function getContactableCandidates(limit = 50) {
+  if (!pool) return [];
+  const result = await query<{
+    provider_id: string; display_name: string; city: string | null; category: string | null;
+    additional_categories: string[] | null; phone: string | null; contact_channel: string; contact_email: string | null;
+  }>(`
+    SELECT p.provider_id, p.display_name, p.city, p.category, p.additional_categories, p.phone, p.contact_channel,
+           c.email AS contact_email
+    FROM marketplace.providers p
+    LEFT JOIN LATERAL (
+      SELECT email FROM marketplace.contacts WHERE provider_id = p.provider_id ORDER BY created_at DESC LIMIT 1
+    ) c ON true
+    WHERE p.status = 'candidate'
+    ORDER BY p.display_name
+    LIMIT $1
+  `, [limit]);
+  return result.rows;
+}
+
+
+/**
+ * Proveedores preregistrados: confirmaron sus datos y esperan aprobación humana.
+ *
+ * Son los que están en `unconfirmed`, el estado al que llegan tanto por el formulario del correo
+ * como por la conversación del bot. Se trae también la respuesta que dieron, porque la pregunta que
+ * se hace el operador aquí no es "quién es este proveedor" sino "¿lo que contó cuadra con la
+ * evidencia que ya teníamos?".
+ */
+export async function getPreregistered(): Promise<Preregistered[]> {
+  if (!pool) return [];
+  const result = await query<Preregistered>(`
+    SELECT p.provider_id, p.display_name, p.city, p.category, p.rating, p.review_count,
+           s.submission_id, s.full_name, s.email, s.phone, s.company_name,
+           COALESCE(s.products, '{}') AS products, COALESCE(s.services, '{}') AS services,
+           s.volume_min, s.volume_max, COALESCE(s.marketing_consent, false) AS marketing_consent,
+           s.consent_source, s.form_payload->>'description' AS description,
+           to_char(s.created_at, 'DD Mon YYYY, HH24:MI') AS submitted_at
+    FROM marketplace.providers p
+    LEFT JOIN LATERAL (
+      SELECT submission_id, full_name, email, phone, company_name, products, services,
+             volume_min, volume_max, marketing_consent, consent_source, form_payload, created_at
+      FROM marketplace.registration_submissions
+      WHERE provider_id = p.provider_id
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) s ON true
+    WHERE p.status = 'unconfirmed'
+    ORDER BY s.created_at DESC NULLS LAST, p.display_name
+    LIMIT 100
+  `);
+  return result.rows;
 }

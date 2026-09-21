@@ -176,6 +176,11 @@ export type ClaudeRunOptions = {
   context: ClaudeRunContext;
   maxRuntimeMs?: number;
   maxIdleMs?: number;
+  /** Solo Codex: modelo y esfuerzo propios de quien llama, en vez de los de curaduria. */
+  model?: string;
+  reasoningEffort?: string;
+  /** Solo Codex: ignora la configuracion personal de Codex de la maquina. */
+  ignoreUserConfig?: boolean;
 };
 
 export type ClaudeRunResult = {
@@ -453,11 +458,16 @@ function assertSafeCodexToken(value: string, label: string): string {
 }
 
 /** El prompt viaja por stdin, nunca por argv: así el argv de Codex solo contiene literales fijos. */
-export function buildCodexArgs(model: string, reasoningEffort: string): string[] {
+export function buildCodexArgs(model: string, reasoningEffort: string, ignoreUserConfig = false): string[] {
   return [
     'exec',
     '--json',
     '--skip-git-repo-check',
+    // Aisla la ejecucion de la configuracion personal de quien tenga la maquina. Sin esto, las
+    // instrucciones de agente del usuario se cuelan en la respuesta: en pruebas, el bot llego a
+    // contestarle a un proveedor "Uso caveman full para responder breve". La autenticacion no se
+    // ve afectada, que sigue saliendo de CODEX_HOME.
+    ...(ignoreUserConfig ? ['--ignore-user-config'] : []),
     // Codex no tiene un equivalente a --disallowedTools: el sandbox de solo lectura es lo que le
     // impide escribir archivos o ejecutar comandos, igual que --disallowedTools hace para Claude.
     '--sandbox', 'read-only',
@@ -481,9 +491,11 @@ export function runCodexCli(options: ClaudeRunOptions): Promise<ClaudeRunResult>
 
   return new Promise((resolve, reject) => {
     const command = env('CODEX_CLI_PATH') || 'codex';
-    const model = env('CODEX_MODEL') || 'gpt-5.6-luna';
-    const reasoningEffort = env('CODEX_REASONING_EFFORT') || 'medium';
-    const args = buildCodexArgs(model, reasoningEffort);
+    // Quien llama puede pedir otro modelo o esfuerzo: el chat y la curaduria son trabajos distintos
+    // y no tienen por que compartir ajuste. Sin override, manda la configuracion de curaduria.
+    const model = options.model || env('CODEX_MODEL') || 'gpt-5.6-luna';
+    const reasoningEffort = options.reasoningEffort || env('CODEX_REASONING_EFFORT') || 'medium';
+    const args = buildCodexArgs(model, reasoningEffort, options.ignoreUserConfig === true);
 
     const runId = randomUUID();
     const startedAt = new Date();
@@ -1602,11 +1614,8 @@ Each ID must follow the pattern LLL-CC-###, where: LLL is a 3-letter code YOU de
 
 Return a valid JSON object with exactly two fields: "tsv" and "research_summary" (research_summary may be in English or Spanish). In "tsv", include the exact header line ${JSON.stringify(CURATION_HEADERS.join('\t'))}, followed by one row per candidate with all ${CURATION_HEADERS.length} tab-separated columns — the controlled field values, "Sin dato", "Sin Redes", and the justification text must be in Spanish, exactly as specified above. Inside the JSON, always escape newlines as \\n and tabs as \\t; never put a literal newline inside the "tsv" value. Do not use Markdown tables; do not use pipe characters inside cells. Do not include any explanation outside the requested JSON.`;
 
-  input.onPhase?.('researching', provider === 'claude-code'
-    ? 'Conectando con Claude Code y WebSearch.'
-    : provider === 'codex'
-      ? 'Conectando con Codex CLI y búsqueda web.'
-      : 'Conectando con Google Search y contexto de URLs.', { current: 0, total: 4, label: 'Buscando candidatos' });
+  // El texto es el mismo para los tres proveedores: la interfaz no distingue el motor.
+  input.onPhase?.('researching', 'Conectando con el agente de búsqueda y la búsqueda web.', { current: 0, total: 4, label: 'Buscando candidatos' });
   let response: Response | undefined;
   let outputText: string | undefined;
   let discoveredCandidates: CurationDiscoveredCandidate[] = [];

@@ -1,0 +1,166 @@
+---
+import AppLayout from '../../layouts/AppLayout.astro';
+import { fetchCampaignOverview } from '../../lib/api-client';
+
+// La página no consulta la base ni deriva listas: pide la vista ya resuelta y la pinta.
+const { connected, campaigns, recipients, cities, statuses, categories, defaultSender, omnisendReady,
+  qaRecipientsLabel, emailEligibleCount, qaRecipientsCount } = await fetchCampaignOverview(Astro.url.origin);
+---
+
+<AppLayout active="Campañas" title="Envío segmentado">
+  <div class="page">
+    <header class="page-header">
+      <div>
+        <h1>Envío segmentado</h1>
+        <p class="page-intro">Filtra candidatos, selecciona contactos elegibles y manda una campaña desde un solo lugar.</p>
+      </div>
+      <div class="recipient-total"><strong>{recipients.length}</strong><span>candidatos<br />{emailEligibleCount} listos para correo</span></div>
+    </header>
+
+    <div class="notice"><span class="notice-dot"></span><span><strong>Regla de envío.</strong> Correo solo sale a candidatos con canal correo, dirección válida y consentimiento concedido. WhatsApp se puede segmentar, pero requiere integración de WhatsApp para enviarse.</span></div>
+    {!connected && <div class="notice"><span class="notice-dot"></span><span><strong>Modo demostración.</strong> Conecta PostgreSQL y configura Omnisend para operar envíos reales.</span></div>}
+
+    <section class="panel campaign-composer">
+      <div class="section-heading"><div><h2>Preparar envío</h2><p>La selección visible cambia según filtros; no incluye candidatos no aptos para correo.</p></div><span id="selection-count" aria-live="polite">0 seleccionados</span></div>
+      <form id="campaign-form">
+        <div class="form-grid">
+          <label>Nombre interno<input class="form-input" name="name" required placeholder="Primer contacto · Barranquilla" /></label>
+          <label>Remitente<input class="form-input" name="sender_email" type="email" required value={defaultSender} placeholder="remitente@dominio.com" /></label>
+          <label class="wide">Asunto<input class="form-input" name="subject" required placeholder="Una oportunidad para trabajar juntos" /></label>
+          <label class="wide">Cuerpo<textarea class="form-input body-input" name="body_text" required placeholder="Hola {{nombre}},&#10;&#10;Nos gustaría conocer...&#10;&#10;{{enlace_registro}}"></textarea></label>
+        </div>
+
+        <div class="segment-controls" aria-label="Filtros de destinatarios">
+          <label>Canal<select class="form-input" id="filter-channel"><option value="all">Todos</option><option value="email">Correo</option><option value="whatsapp">WhatsApp</option></select></label>
+          <label>Ciudad<select class="form-input" id="filter-city"><option value="all">Todas</option>{cities.map((city) => <option value={city}>{city}</option>)}</select></label>
+          <label>Estado<select class="form-input" id="filter-status"><option value="all">Todos</option>{statuses.map((status) => <option value={status}>{status}</option>)}</select></label>
+          <label>Tipo<select class="form-input" id="filter-category"><option value="all">Todos</option>{categories.map((category) => <option value={category}>{category}</option>)}</select></label>
+        </div>
+
+        <div class="recipients">
+          <div class="recipients-head"><div><strong>Destinatarios segmentados</strong><small id="segment-summary">{recipients.length} candidatos en segmento</small></div><div class="recipient-actions"><button type="button" class="text-link" id="select-visible">Seleccionar aptos visibles</button><button type="button" class="text-link" id="clear-selection">Limpiar</button></div></div>
+          {recipients.length ? <div class="recipient-list" id="recipient-list">
+            {recipients.map((recipient) => <label class={`recipient ${recipient.email_eligible ? '' : 'recipient-disabled'}`} data-recipient data-channel={recipient.contact_channel} data-city={recipient.city} data-status={recipient.status} data-category={recipient.category}>
+              <input type="checkbox" name="contact_ids" value={recipient.contact_id ?? ''} disabled={!recipient.email_eligible} />
+              <span class="recipient-copy"><strong>{recipient.display_name}</strong><small>{recipient.city} · {recipient.category} · {recipient.status}</small><small>{recipient.email ?? recipient.phone ?? 'Sin contacto registrado'}</small></span>
+              <span class={`channel channel-${recipient.contact_channel}`}>{recipient.contact_channel === 'email' ? 'Correo' : 'WhatsApp'}</span>
+              <span class={`eligibility ${recipient.email_eligible ? 'eligible' : 'ineligible'}`}>{recipient.email_eligible ? 'Listo' : recipient.contact_channel === 'whatsapp' ? 'WhatsApp' : recipient.consent_status === 'granted' ? 'Sin correo' : 'Sin consentimiento'}</span>
+            </label>)}
+          </div> : <p class="empty-state">Aún no hay candidatos en PostgreSQL.</p>}
+        </div>
+
+        <label class="check"><input type="checkbox" name="confirm" value="true" required />Confirmo contenido, segmento y destinatarios de este envío.</label>
+        <div class="actions"><button class="primary-button" id="send-campaign" type="submit" disabled data-omnisend-ready={omnisendReady ? 'true' : 'false'}>Enviar a seleccionados <svg viewBox="0 0 20 20"><path d="m18 2-7 16-3-7-6-3 16-6Z"/><path d="m8 11 4-4"/></svg></button><button class="secondary-button" id="qa-test" type="button" data-recipients={qaRecipientsLabel} disabled={!omnisendReady}>Prueba QA ({qaRecipientsCount})</button></div>
+        {!omnisendReady && <p class="muted qa-hint">Configura Omnisend para habilitar el envío y la prueba QA.</p>}
+        <p id="campaign-result" class="result" role="status"></p>
+      </form>
+    </section>
+
+    <section class="panel table-panel history"><div class="panel-head"><span><strong>Historial</strong> · {campaigns.length}</span><span>Enviados, clics y formularios salen de PostgreSQL; la columna Omnisend consulta su API bajo demanda</span></div>{campaigns.length ? <div class="table-wrap"><table class="data-table"><thead><tr><th>Campaña</th><th>Remitente</th><th>Estado</th><th>Destinatarios</th><th>Enviados</th><th>Fallidos</th><th>Clics</th><th>Formularios</th><th>Omnisend</th></tr></thead><tbody>{campaigns.map((campaign) => <tr><td><strong>{campaign.name}</strong><div class="muted">{campaign.subject}</div></td><td>{campaign.sender_email}</td><td><span class={`status status-${campaign.status}`}>{campaign.status}</span></td><td>{campaign.recipients}</td><td>{campaign.sent}</td><td>{campaign.failed}</td><td>{campaign.clicked}</td><td>{campaign.forms}</td><td>{campaign.omnisend_campaign_id ? <div class="omnisend-cell"><a href={`https://app.omnisend.com/campaigns/${campaign.omnisend_campaign_id}/report`} target="_blank" rel="noreferrer">Ver campaña ↗</a><button type="button" class="text-link stats-btn" data-omnisend-campaign-id={campaign.campaign_id}>Estadísticas</button><span class="stats-result" data-stats-for={campaign.campaign_id}></span></div> : <span class="muted">—</span>}</td></tr>)}</tbody></table></div> : <div class="empty-state"><strong>Aún no hay campañas</strong><p>Primer envío aparecerá aquí.</p></div>}</section>
+  </div>
+<script>
+  // @ts-nocheck
+  const form = /** @type {HTMLFormElement | null} */ (document.querySelector('#campaign-form'));
+  const result = /** @type {HTMLElement | null} */ (document.querySelector('#campaign-result'));
+  const sendCampaign = /** @type {HTMLButtonElement | null} */ (document.querySelector('#send-campaign'));
+  const selectionCount = /** @type {HTMLElement | null} */ (document.querySelector('#selection-count'));
+  const segmentSummary = /** @type {HTMLElement | null} */ (document.querySelector('#segment-summary'));
+  const selectVisible = /** @type {HTMLButtonElement | null} */ (document.querySelector('#select-visible'));
+  const clearSelection = /** @type {HTMLButtonElement | null} */ (document.querySelector('#clear-selection'));
+  const qaTest = /** @type {HTMLButtonElement | null} */ (document.querySelector('#qa-test'));
+  const filterChannel = /** @type {HTMLSelectElement | null} */ (document.querySelector('#filter-channel'));
+  const filterCity = /** @type {HTMLSelectElement | null} */ (document.querySelector('#filter-city'));
+  const filterStatus = /** @type {HTMLSelectElement | null} */ (document.querySelector('#filter-status'));
+  const filterCategory = /** @type {HTMLSelectElement | null} */ (document.querySelector('#filter-category'));
+  const recipientRows = /** @type {HTMLElement[]} */ ([...document.querySelectorAll('[data-recipient]')]);
+  const checkedInputs = () => /** @type {HTMLInputElement[]} */ ([...document.querySelectorAll('input[name="contact_ids"]:checked')]);
+
+  function updateSelection() {
+    const selected = checkedInputs().length;
+    if (selectionCount) selectionCount.textContent = `${selected} seleccionado${selected === 1 ? '' : 's'}`;
+    if (sendCampaign) sendCampaign.disabled = selected === 0 || sendCampaign.dataset.omnisendReady !== 'true';
+  }
+
+  function applyFilters() {
+    const selectedChannel = filterChannel?.value ?? 'all';
+    const selectedCity = filterCity?.value ?? 'all';
+    const selectedStatus = filterStatus?.value ?? 'all';
+    const selectedCategory = filterCategory?.value ?? 'all';
+    let visible = 0;
+    let emailReady = 0;
+    recipientRows.forEach((row) => {
+      const matches = (selectedChannel === 'all' || row.dataset.channel === selectedChannel)
+        && (selectedCity === 'all' || row.dataset.city === selectedCity)
+        && (selectedStatus === 'all' || row.dataset.status === selectedStatus)
+        && (selectedCategory === 'all' || row.dataset.category === selectedCategory);
+      row.hidden = !matches;
+      if (matches) {
+        visible += 1;
+        if (!row.querySelector('input:disabled')) emailReady += 1;
+      }
+    });
+    if (segmentSummary) segmentSummary.textContent = `${visible} candidatos · ${emailReady} aptos para correo`;
+  }
+
+  [filterChannel, filterCity, filterStatus, filterCategory].forEach((filter) => filter?.addEventListener('change', applyFilters));
+  /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('input[name="contact_ids"]')).forEach((input) => input.addEventListener('change', updateSelection));
+  selectVisible?.addEventListener('click', () => {
+    recipientRows.filter((row) => !row.hidden).forEach((row) => {
+      const input = row.querySelector('input[name="contact_ids"]');
+      if (input && !input.disabled) input.checked = true;
+    });
+    updateSelection();
+  });
+  clearSelection?.addEventListener('click', () => {
+    checkedInputs().forEach((input) => { input.checked = false; });
+    updateSelection();
+  });
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const contactIds = checkedInputs().map((input) => input.value);
+    if (!contactIds.length) return;
+    if (!window.confirm(`Enviar correo a ${contactIds.length} candidatos seleccionados?\n\nOmnisend crea un segmento real para este lote antes de enviar; puede tardar hasta 1-2 minutos, no se cierre la pestaña.`)) return;
+    if (sendCampaign) sendCampaign.disabled = true;
+    if (result) result.textContent = 'Enviando campaña… (creando segmento en Omnisend, puede tardar hasta 2 minutos)';
+    const payload = /** @type {Record<string, unknown>} */ (Object.fromEntries(new FormData(form)));
+    payload.contact_ids = contactIds;
+    const response = await fetch('/api/campaigns', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await response.json().catch(() => ({}));
+    if (result) result.textContent = response.ok ? `Envío terminado: ${data.sent} enviados, ${data.failed} fallidos.` : `No se pudo enviar: ${data.error ?? 'error desconocido'}.`;
+    if (response.ok) window.setTimeout(() => window.location.reload(), 900);
+    else updateSelection();
+  });
+  document.querySelectorAll('.stats-btn').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const campaignId = /** @type {HTMLElement} */ (button).dataset.omnisendCampaignId;
+      const target = document.querySelector(`[data-stats-for="${campaignId}"]`);
+      if (!target) return;
+      target.textContent = 'Consultando…';
+      const response = await fetch(`/api/campaigns/${campaignId}/stats`);
+      const data = await response.json().catch(() => ({}));
+      target.textContent = response.ok && data.stats
+        ? `Entregados: ${data.stats.delivered} · Abiertos: ${data.stats.opened} · Clics: ${data.stats.clicked} · Rebotes: ${data.stats.bounced}`
+        : `No disponible (${data.error ?? 'error desconocido'})`;
+    });
+  });
+  qaTest?.addEventListener('click', async () => {
+    if (!form?.reportValidity()) return;
+    const recipients = qaTest.dataset.recipients ?? 'destinatarios QA';
+    if (!window.confirm(`Enviar prueba a: ${recipients}?`)) return;
+    qaTest.disabled = true;
+    if (result) result.textContent = 'Enviando prueba QA…';
+    const payload = /** @type {Record<string, unknown>} */ (Object.fromEntries(new FormData(form)));
+    payload.confirm = 'true';
+    const response = await fetch('/api/campaigns/qa-test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await response.json().catch(() => ({}));
+    if (result) result.textContent = response.ok ? `Prueba enviada a: ${(data.recipients ?? []).join(', ') || recipients}.` : `No se pudo enviar prueba: ${data.error ?? 'error desconocido'}.`;
+    qaTest.disabled = false;
+  });
+  applyFilters();
+  updateSelection();
+</script>
+</AppLayout>
+
+<style>
+  .page-header{display:flex;justify-content:space-between;gap:24px;align-items:flex-end}.page-header h1{margin:0}.page-intro{max-width:680px}.recipient-total{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);font-size:11px;color:var(--text-muted);line-height:1.35}.recipient-total strong{font-size:24px;line-height:1;color:var(--text);font-variant-numeric:tabular-nums}.notice{display:flex;align-items:center;gap:9px;margin:-8px 0 21px;padding:11px 14px;border:1px solid var(--warn-line);border-radius:10px;color:var(--warn);background:var(--warn-bg);font-size:12px}.notice-dot{width:7px;height:7px;border-radius:50%;background:var(--warn)}code{font-family:var(--font-mono);font-size:11px}.campaign-composer{padding:22px;margin-bottom:22px}.section-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.section-heading h2{margin:0}.section-heading p{margin:5px 0 0;color:var(--text-muted);font-size:12px}.section-heading>span{color:var(--accent);font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}.form-grid,.segment-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.form-grid{margin-top:20px}.form-grid label,.segment-controls label{display:grid;gap:7px;color:var(--text-muted);font-size:11px;font-weight:600}.form-grid .wide{grid-column:1/-1}.body-input{min-height:160px;padding:12px;resize:vertical}.segment-controls{grid-template-columns:repeat(4,minmax(0,1fr));margin:22px 0 0;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)}.recipients{margin-top:22px;border-top:1px solid var(--line);padding-top:17px}.recipients-head{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:10px;font-size:12px}.recipients-head strong,.recipients-head small{display:block}.recipients-head small{margin-top:4px;color:var(--text-subtle);font-size:10px}.recipient-actions{display:flex;gap:12px}.recipient-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:420px;overflow:auto;padding-right:4px}.recipient{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:start;padding:11px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);font-size:12px;transition:border-color .18s ease,background .18s ease}.recipient:hover{border-color:var(--accent)}.recipient input{margin-top:3px}.recipient-copy strong,.recipient-copy small{display:block}.recipient-copy small{margin-top:3px;color:var(--text-subtle);font-size:10px;overflow-wrap:anywhere}.recipient-disabled{opacity:.62;cursor:not-allowed}.recipient-disabled:hover{border-color:var(--line)}.channel,.eligibility{font-size:9px;font-weight:700;line-height:1;padding:5px 6px;border-radius:999px;white-space:nowrap}.channel-email,.eligible{background:var(--success-bg);color:var(--success)}.channel-whatsapp{background:var(--warn-bg);color:var(--warn)}.ineligible{background:var(--surface);color:var(--text-muted)}.check{display:flex;align-items:flex-start;gap:9px;margin:18px 0;color:var(--text-muted);font-size:11px}.check input{margin-top:2px}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.secondary-button{padding:10px 14px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--text);font-size:11px;font-weight:700;cursor:pointer}.secondary-button:disabled,.primary-button:disabled{opacity:.45;cursor:not-allowed}.qa-hint{margin:10px 0 0}.result{min-height:18px;margin:11px 0 0;color:var(--text-muted);font-size:11px}.history{overflow:hidden}.omnisend-cell{display:flex;flex-direction:column;align-items:flex-start;gap:4px;font-size:11px}.omnisend-cell a{color:var(--accent)}.omnisend-cell .stats-btn{padding:0;border:0;background:none;font-size:10px}.stats-result{color:var(--text-subtle);font-size:10px}@media(max-width:900px){.segment-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.recipient-list{grid-template-columns:1fr}}@media(max-width:720px){.page-header,.recipients-head{align-items:flex-start;flex-direction:column}.form-grid,.segment-controls{grid-template-columns:1fr}.form-grid .wide{grid-column:auto}.recipient{grid-template-columns:auto minmax(0,1fr)}.channel,.eligibility{grid-column:2}.recipient-total{align-self:stretch}.recipient-actions{width:100%;justify-content:space-between}}
+</style>

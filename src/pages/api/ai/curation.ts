@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { runCurationGoal } from '../../../lib/curation-run';
 import { importCurationTsv } from '../../../lib/provider-import';
 import { completeCurationJob, createCurationJob, failCurationJob, getCurationJob, getRunningCurationJob, updateCurationJob } from '../../../lib/curation-job';
+import { neutralizeAgentText } from '../../../lib/agent-identity';
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
@@ -17,7 +18,9 @@ function jobPayload(job: ReturnType<typeof getCurationJob>) {
     jobId: job.jobId,
     status: job.status,
     phase: job.phase,
-    phases: job.phases,
+    // El nombre del proveedor de IA no sale del servidor: se filtra aquí, en el único punto por el
+    // que el estado del job llega al navegador. El job en memoria y los logs conservan el original.
+    phases: job.phases.map((phase) => ({ ...phase, detail: neutralizeAgentText(phase.detail) })),
     targetCount: job.targetCount,
     timers: {
       totalMs: Math.max(0, finishedAt - Date.parse(job.createdAt)),
@@ -28,7 +31,7 @@ function jobPayload(job: ReturnType<typeof getCurationJob>) {
     // La vista previa también viaja cuando el job falla: los proveedores ya encontrados se muestran.
     ...(job.status !== 'completed' && job.preview ? { preview: job.preview } : {}),
     ...(job.status === 'completed' ? job.result : {}),
-    ...(job.status === 'failed' ? { error: job.error } : {}),
+    ...(job.status === 'failed' ? { error: neutralizeAgentText(job.error ?? '') } : {}),
   };
 }
 
