@@ -20,8 +20,22 @@ type CampaignRecipient = {
 
 const campaigns = pool ? (await query<{
   campaign_id: string; name: string; subject: string; status: string; sender_email: string; created_at: string;
-  recipients: number; sent: number; failed: number; omnisend_campaign_id: string | null;
-}>(`SELECT c.campaign_id, c.name, c.subject, c.status, c.sender_email, c.created_at, count(cs.send_id)::int AS recipients, count(cs.send_id) FILTER (WHERE cs.status = 'sent')::int AS sent, count(cs.send_id) FILTER (WHERE cs.status = 'failed')::int AS failed, max(cs.provider_message_id) AS omnisend_campaign_id FROM marketplace.campaigns c LEFT JOIN marketplace.campaign_sends cs ON cs.campaign_id = c.campaign_id GROUP BY c.campaign_id ORDER BY c.created_at DESC LIMIT 30`)).rows : [];
+  recipients: number; sent: number; failed: number; clicked: number; forms: number; omnisend_campaign_id: string | null;
+}>(`SELECT c.campaign_id, c.name, c.subject, c.status, c.sender_email, c.created_at,
+         count(DISTINCT cs.send_id)::int AS recipients,
+         count(DISTINCT cs.send_id) FILTER (WHERE cs.status = 'sent')::int AS sent,
+         count(DISTINCT cs.send_id) FILTER (WHERE cs.status = 'failed')::int AS failed,
+         count(DISTINCT ec.send_id)::int AS clicked,
+         count(DISTINCT cs.send_id) FILTER (WHERE cs.form_submitted_at IS NOT NULL)::int AS forms,
+         max(cs.provider_message_id) AS omnisend_campaign_id
+  FROM marketplace.campaigns c
+  LEFT JOIN marketplace.campaign_sends cs ON cs.campaign_id = c.campaign_id
+  -- Un envío con varios clics cuenta una vez: la pregunta es cuántos destinatarios mostraron
+  -- interés, no cuántas veces pulsaron.
+  LEFT JOIN marketplace.email_clicks ec ON ec.send_id = cs.send_id
+  GROUP BY c.campaign_id
+  ORDER BY c.created_at DESC
+  LIMIT 30`)).rows : [];
 const recipients = pool ? (await query<CampaignRecipient>(`
   SELECT p.provider_id, p.display_name, p.category, p.city, p.status, p.contact_channel, p.phone,
          c.contact_id, c.email, c.full_name, c.consent_status,
@@ -96,7 +110,7 @@ const emailEligibleCount = recipients.filter((item) => item.email_eligible).leng
       </form>
     </section>
 
-    <section class="panel table-panel history"><div class="panel-head"><span><strong>Historial</strong> · {campaigns.length}</span><span>Envíos registrados en PostgreSQL</span></div>{campaigns.length ? <div class="table-wrap"><table class="data-table"><thead><tr><th>Campaña</th><th>Remitente</th><th>Estado</th><th>Destinatarios</th><th>Enviados</th><th>Fallidos</th><th>Omnisend</th></tr></thead><tbody>{campaigns.map((campaign) => <tr><td><strong>{campaign.name}</strong><div class="muted">{campaign.subject}</div></td><td>{campaign.sender_email}</td><td><span class={`status status-${campaign.status}`}>{campaign.status}</span></td><td>{campaign.recipients}</td><td>{campaign.sent}</td><td>{campaign.failed}</td><td>{campaign.omnisend_campaign_id ? <div class="omnisend-cell"><a href={`https://app.omnisend.com/campaigns/${campaign.omnisend_campaign_id}/report`} target="_blank" rel="noreferrer">Ver campaña ↗</a><button type="button" class="text-link stats-btn" data-omnisend-campaign-id={campaign.campaign_id}>Estadísticas</button><span class="stats-result" data-stats-for={campaign.campaign_id}></span></div> : <span class="muted">—</span>}</td></tr>)}</tbody></table></div> : <div class="empty-state"><strong>Aún no hay campañas</strong><p>Primer envío aparecerá aquí.</p></div>}</section>
+    <section class="panel table-panel history"><div class="panel-head"><span><strong>Historial</strong> · {campaigns.length}</span><span>Enviados, clics y formularios salen de PostgreSQL; la columna Omnisend consulta su API bajo demanda</span></div>{campaigns.length ? <div class="table-wrap"><table class="data-table"><thead><tr><th>Campaña</th><th>Remitente</th><th>Estado</th><th>Destinatarios</th><th>Enviados</th><th>Fallidos</th><th>Clics</th><th>Formularios</th><th>Omnisend</th></tr></thead><tbody>{campaigns.map((campaign) => <tr><td><strong>{campaign.name}</strong><div class="muted">{campaign.subject}</div></td><td>{campaign.sender_email}</td><td><span class={`status status-${campaign.status}`}>{campaign.status}</span></td><td>{campaign.recipients}</td><td>{campaign.sent}</td><td>{campaign.failed}</td><td>{campaign.clicked}</td><td>{campaign.forms}</td><td>{campaign.omnisend_campaign_id ? <div class="omnisend-cell"><a href={`https://app.omnisend.com/campaigns/${campaign.omnisend_campaign_id}/report`} target="_blank" rel="noreferrer">Ver campaña ↗</a><button type="button" class="text-link stats-btn" data-omnisend-campaign-id={campaign.campaign_id}>Estadísticas</button><span class="stats-result" data-stats-for={campaign.campaign_id}></span></div> : <span class="muted">—</span>}</td></tr>)}</tbody></table></div> : <div class="empty-state"><strong>Aún no hay campañas</strong><p>Primer envío aparecerá aquí.</p></div>}</section>
   </div>
 <script>
   // @ts-nocheck

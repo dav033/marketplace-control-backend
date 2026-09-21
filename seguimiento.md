@@ -1078,3 +1078,96 @@ f5ce60e feat: no volver a buscar proveedores que ya están en la base
 0f03f2b refactor: ciudad y categoría por encima del resto de filtros
 a8ef5c3 fix: la blacklist deja de arrastrar el historial entre corridas
 ```
+
+## 33. Cableado cerrado: del correo al proveedor confirmado — 2026-09-21
+
+El plan de la sección 31 está ejecutado y **probado de extremo a extremo con correo
+real** al buzón de prueba. La cadena completa funciona: se manda el correo → llega
+→ el proveedor pulsa el enlace → se cuenta el clic → cae en el formulario → lo
+rellena → su ficha pasa a `unconfirmed`.
+
+### 33.1 Lo que se tocó
+
+**Paso 1 · El enlace pasa por el contador.** `campaigns.ts` ponía
+`registration_url` como `/registro/<token>` y se saltaba `/t/<token>`. Una línea.
+Comprobado leyendo la propiedad del contacto en la API de Omnisend: el enlace que
+salió al correo es `http://localhost:4321/t/<token>`.
+
+**Paso 2 · El formulario mueve al proveedor.** `form-submit.ts` hacía cuatro
+`query()` sueltos contra el pool; ahora toma una conexión y todo va en una
+transacción: ficha, `form_submitted_at`, el `UPDATE` del proveedor a `unconfirmed`
+y la entrada de `audit_log`. Si falla uno no queda ninguno.
+
+Tres decisiones dentro de ese cambio:
+
+- El `SELECT` del envío toma `FOR UPDATE`. Dos entregas simultáneas del mismo
+  enlace se serializan y la segunda ve escrito `form_submitted_at`, así que sale
+  por el 409 en vez de duplicar la ficha.
+- El `UPDATE` lleva `WHERE status = 'candidate'`. Un registro tardío no debe
+  retroceder una ficha que un operador ya movió a `approved` o `rejected`. Cuando
+  no se mueve, el `audit_log` lo anota con `status_changed: false`.
+- **`reviewed_at` se deja en NULL**, al contrario de lo que insinuaba el borrador
+  de 31.3. Esa columna va con `reviewed_by` y significa que una persona revisó;
+  escribirla al registrarse el proveedor sería afirmar una revisión que no ocurrió.
+  Que falte esa revisión es justamente lo que `unconfirmed` significa.
+
+La migración del `CHECK` está aplicada en producción y guardada en
+`sql/2026-09-21-providers-status-unconfirmed.sql`. `schema.sql` recoge el estado
+nuevo, y con él `ProviderStatus`, `StatusBadge` (etiqueta «Registrado»), el color
+del badge, el filtro de la vista, el conteo «Por revisar» y `demo.ts`.
+
+**Paso 3 · Envío real.** No había que orquestar nada: `sendCampaign` ya encadenaba
+contactos, segmento, plantilla, borrador y `sendEmailCampaign`, y el botón «Enviar
+a seleccionados» ya lo dispara. La sección 31.2 daba este hueco por abierto y no
+lo estaba. **Lo que sí estaba roto era el envío**: Omnisend devolvía 400 con
+`'statusChangedAt' must not be in the future` porque `upsertConsentedContact`
+mandaba `new Date().toISOString()` y su reloj va ligeramente por detrás. Un minuto
+de margen lo arregla. El reloj local se comprobó contra un servidor externo: iba
+exacto al segundo, el desfase es de ellos.
+
+**Paso 4 · El círculo en el panel.** El historial de campañas suma dos columnas,
+Clics y Formularios, leídas de PostgreSQL. Los conteos van con `DISTINCT` porque
+el JOIN con `email_clicks` multiplica una fila por clic e inflaba también la
+columna de destinatarios. La consulta a la API de Omnisend sigue siendo solo bajo
+demanda, por la cuota.
+
+**Fallo aparte, encontrado al probar.** En la vista de proveedores,
+`.prov{display:grid}` gana al `display:none` que el navegador aplica a `[hidden]`,
+así que las fichas filtradas **seguían viéndose** aunque el contador marcara 0 y
+saliera el mensaje de vacío. Viene de `6e5c76b`, no de este trabajo. Una regla
+`.prov[hidden]{display:none}` lo corrige.
+
+### 33.2 La prueba, con sus datos
+
+Proveedor y contacto de prueba creados a mano apuntando a
+`david.theran03@gmail.com`, único contacto elegible de la base en ese momento —
+comprobado con un `SELECT` antes de disparar.
+
+| Comprobación | Resultado |
+|---|---|
+| `POST /api/campaigns` | `sent: 1, failed: 0` |
+| Enlace en el contacto de Omnisend | `…/t/f3984a7e…` |
+| `GET /t/<token>` | 302 a `/registro/<token>` |
+| `email_clicks` | 1 fila, `link_key='registration'` |
+| Formulario enviado desde el navegador | «Datos recibidos» |
+| `providers.status` | `candidate` → `unconfirmed` |
+| `form_submitted_at` vs `providers.updated_at` | `10:50:05.152Z` en ambos: misma transacción |
+| `audit_log` | `provider.confirmed`, `status_changed: true` |
+| Reabrir el enlace | «Ya tenemos tu información» |
+| Reenviar el formulario | 409, sin fichas ni auditorías duplicadas |
+| Panel de campañas | Destinatarios 1 · Enviados 1 · Clics 1 · Formularios 1 |
+| Portada | «Mostraron interés: 1», que antes era cero por construcción |
+
+*Nota sobre el 403.* Reenviar el formulario con `curl` sin cabecera `Origin`
+devuelve 403, no 409: es la protección CSRF de Astro, antes de llegar al endpoint.
+Con `Origin` puesto responde el 409 que corresponde.
+
+### 33.3 Lo que sigue pendiente
+
+- **SES sigue en sandbox.** Solo se puede escribir a direcciones verificadas. El
+  envío a proveedores reales necesita salir del sandbox y autorización explícita.
+- **`APP_URL` apunta a `http://localhost:4321`.** Los enlaces de un envío real
+  saldrían con esa dirección. Hay que apuntarlo al dominio antes de cualquier
+  campaña de verdad.
+- **Nadie aprueba todavía.** `unconfirmed` espera a un operador, pero no hay
+  acción en el panel para pasar de ahí a `approved`.

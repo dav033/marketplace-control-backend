@@ -84,7 +84,7 @@ export async function sendCampaign(input: { name: string; subject: string; bodyT
       consentGranted: true,
       email: recipient.email,
       firstName: recipient.full_name || recipient.display_name || undefined,
-      customProperties: { registration_url: `${baseUrl}/registro/${recipient.token}` },
+      customProperties: { registration_url: `${baseUrl}/t/${recipient.token}` },
       tags: [sendTag],
     })));
 

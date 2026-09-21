@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
+import type { PoolClient } from 'pg';
 import { createHash } from 'node:crypto';
-import { pool, query } from '../../../lib/db';
+import { pool } from '../../../lib/db';
 import { hashToken } from '../../../lib/tracking';
 
 function hash(value: string) { return createHash('sha256').update(value).digest(); }
@@ -42,6 +43,15 @@ export function parseVolume(rawMin: string, rawMax: string): { min: number; max:
   return { min, max };
 }
 
+/**
+ * Un rechazo de validación a mitad de la transacción tiene que deshacerla: sin esto la conexión
+ * volvía al pool con un `BEGIN` abierto y contaminaba la siguiente petición que la tomara.
+ */
+async function rollback(client: PoolClient, response: Response) {
+  try { await client.query('ROLLBACK'); } catch { /* la conexión ya no sirve */ }
+  return response;
+}
+
 export const POST: APIRoute = async ({ request, redirect }) => {
   // `formData()` lanza cuando el content-type no es de formulario. Fuera del try devolvía un 500 sin
   // manejar en un endpoint público, así que el parseo entra en el guardado de errores.
@@ -58,22 +68,29 @@ export const POST: APIRoute = async ({ request, redirect }) => {
   if (!token || !email || !privacy || !email.includes('@')) return new Response('Datos incompletos o inválidos.', { status: 400 });
 
   if (pool) {
+    const client = await pool.connect();
+    let began = false;
     try {
       const tokenHash = hashToken(token);
-      const send = await query<{ provider_id: string | null; token_expires_at: Date | null; form_submitted_at: Date | null }>(
-        `SELECT provider_id, token_expires_at, form_submitted_at
+      await client.query('BEGIN');
+      began = true;
+      // `FOR UPDATE` sobre el envío: dos entregas simultáneas del mismo enlace se serializan aquí, así
+      // que la segunda ve ya escrito `form_submitted_at` y sale por el 409 en vez de duplicar la ficha.
+      const send = await client.query<{ send_id: string; provider_id: string | null; token_expires_at: Date | null; form_submitted_at: Date | null }>(
+        `SELECT send_id, provider_id, token_expires_at, form_submitted_at
          FROM marketplace.campaign_sends
          WHERE tracking_token_hash = $1 AND status NOT IN ('suppressed','opted_out')
-         LIMIT 1`,
+         LIMIT 1
+         FOR UPDATE`,
         [tokenHash],
       );
       const sendRow = send.rows[0];
-      if (!sendRow) return new Response('Enlace inválido o vencido.', { status: 404 });
+      if (!sendRow) return await rollback(client, new Response('Enlace inválido o vencido.', { status: 404 }));
       // Envío único: una segunda entrega ya no sobrescribe la primera.
-      if (sendRow.form_submitted_at) return new Response('Este formulario ya fue enviado.', { status: 409 });
+      if (sendRow.form_submitted_at) return await rollback(client, new Response('Este formulario ya fue enviado.', { status: 409 }));
       // `token_expires_at` nulo es un envío anterior a la migración y se considera vigente.
       if (sendRow.token_expires_at && sendRow.token_expires_at.getTime() < Date.now()) {
-        return new Response('Este enlace ya caducó.', { status: 410 });
+        return await rollback(client, new Response('Este enlace ya caducó.', { status: 410 }));
       }
 
       const fullName = String(body.get('full_name') ?? '').trim();
@@ -81,18 +98,18 @@ export const POST: APIRoute = async ({ request, redirect }) => {
       const companyName = String(body.get('company_name') ?? '').trim();
       const description = String(body.get('description') ?? '').trim();
       if (fullName.length < 2 || companyName.length < 2 || fullName.length > 160 || companyName.length > 200 || description.length > 4000) {
-        return new Response('Datos incompletos o demasiado largos.', { status: 400 });
+        return await rollback(client, new Response('Datos incompletos o demasiado largos.', { status: 400 }));
       }
 
       const products = parseList(String(body.get('products') ?? ''), MAX_PRODUCTS);
       const services = parseList(String(body.get('services') ?? ''), MAX_SERVICES, OFFICIAL_CATEGORIES);
       const volume = parseVolume(String(body.get('volume_min') ?? ''), String(body.get('volume_max') ?? ''));
-      if (!products || !products.length) return new Response(`Indica entre 1 y ${MAX_PRODUCTS} productos.`, { status: 400 });
-      if (!services || !services.length) return new Response(`Marca entre 1 y ${MAX_SERVICES} categorías oficiales.`, { status: 400 });
-      if (!volume) return new Response('El rango de asistentes no es válido.', { status: 400 });
+      if (!products || !products.length) return await rollback(client, new Response(`Indica entre 1 y ${MAX_PRODUCTS} productos.`, { status: 400 }));
+      if (!services || !services.length) return await rollback(client, new Response(`Marca entre 1 y ${MAX_SERVICES} categorías oficiales.`, { status: 400 }));
+      if (!volume) return await rollback(client, new Response('El rango de asistentes no es válido.', { status: 400 }));
 
       const marketingConsent = body.get('marketing_consent') === 'true';
-      await query(
+      await client.query(
         `INSERT INTO marketplace.registration_submissions
            (provider_id, full_name, email, phone, company_name, products, services, volume_min, volume_max,
             privacy_consent, privacy_consent_at, marketing_consent, marketing_consent_at, consent_source,
@@ -107,13 +124,42 @@ export const POST: APIRoute = async ({ request, redirect }) => {
       );
 
       // Marca el envío para que el enlace no vuelva a mostrar el formulario.
-      await query(
+      await client.query(
         `UPDATE marketplace.campaign_sends SET form_submitted_at = now(), updated_at = now() WHERE tracking_token_hash = $1`,
         [tokenHash],
       );
 
+      // El proveedor que rellena el formulario da la señal más fuerte que puede dar, así que sale de
+      // `candidate` y pasa a `unconfirmed`: confirmó sus datos y espera que un operador lo apruebe. No
+      // se salta a `approved` de forma automática y no se toca `reviewed_at`, que es del operador.
+      // El guardia por `status = 'candidate'` evita que un registro tardío retroceda una ficha que ya
+      // pasó por revisión humana.
+      if (sendRow.provider_id) {
+        const promoted = await client.query<{ provider_id: string }>(
+          `UPDATE marketplace.providers SET status = 'unconfirmed', updated_at = now()
+           WHERE provider_id = $1 AND status = 'candidate'
+           RETURNING provider_id`,
+          [sendRow.provider_id],
+        );
+        // `entity_type` es NOT NULL: omitirlo rompe la transacción entera y con ella la ficha ya
+        // guardada. Se anota también el caso en que el estado no se movió, para no perder el rastro.
+        await client.query(
+          `INSERT INTO marketplace.audit_log (actor_id, action, entity_type, entity_id, after_state, metadata)
+           VALUES ('registration-form', 'provider.confirmed', 'provider', $1, $2::jsonb, $3::jsonb)`,
+          [
+            sendRow.provider_id,
+            JSON.stringify({ status: promoted.rows.length ? 'unconfirmed' : null }),
+            JSON.stringify({ send_id: sendRow.send_id, company_name: companyName, status_changed: promoted.rows.length > 0 }),
+          ],
+        );
+      } else {
+        // Por diseño todo envío sale de un proveedor. Si alguna vez llega uno sin él, se registra el
+        // hecho: significa que algo se corrompió aguas arriba.
+        console.error('Registration submission without provider_id', sendRow.send_id);
+      }
+
       if (marketingConsent) {
-        await query(
+        await client.query(
           `INSERT INTO marketplace.contacts (provider_id, full_name, email, phone, consent_status, consent_at, consent_source, consent_text_version)
            VALUES ($1,$2,$3,$4,'granted',now(),'registration-form','v1')
            ON CONFLICT (lower(email)) DO UPDATE SET
@@ -125,12 +171,17 @@ export const POST: APIRoute = async ({ request, redirect }) => {
           [sendRow.provider_id ?? null, fullName, email, phone],
         );
       }
+
+      await client.query('COMMIT');
     } catch (error) {
+      if (began) { try { await client.query('ROLLBACK'); } catch { /* la conexión ya no sirve */ } }
       // Una clave de idempotencia repetida es el mismo envío llegando dos veces, no un fallo.
       const code = (error as { code?: string })?.code;
       if (code === '23505') return new Response('Este formulario ya fue enviado.', { status: 409 });
       console.error('Registration submission failed', error instanceof Error ? error.message : error);
       return new Response('No pudimos guardar tus datos. Intenta de nuevo.', { status: 503 });
+    } finally {
+      client.release();
     }
   }
   return redirect(`/registro/${encodeURIComponent(token)}?sent=1`, 303);

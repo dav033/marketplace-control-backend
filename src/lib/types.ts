@@ -1,4 +1,4 @@
-export type ProviderStatus = 'candidate' | 'under_review' | 'approved' | 'rejected' | 'archived';
+export type ProviderStatus = 'candidate' | 'unconfirmed' | 'under_review' | 'approved' | 'rejected' | 'archived';
 export type ContactChannel = 'email' | 'whatsapp';
 
 export type Provider = {

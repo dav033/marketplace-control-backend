@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS marketplace.providers (
   rating numeric(2,1),
   review_count integer,
   contact_channel text NOT NULL DEFAULT 'whatsapp' CHECK (contact_channel IN ('email','whatsapp')),
-  status text NOT NULL DEFAULT 'candidate' CHECK (status IN ('candidate','under_review','approved','rejected','archived')),
+  status text NOT NULL DEFAULT 'candidate' CHECK (status IN ('candidate','unconfirmed','under_review','approved','rejected','archived')),
   discovery_source text,
   notes text,
   first_seen_at timestamptz NOT NULL DEFAULT now(),
