@@ -10,7 +10,7 @@ const data = await getDashboard();
     {!data.connected && <div class="notice"><span class="notice-dot"></span><span><strong>Modo demostración.</strong> Estos registros muestran la interfaz; conecta PostgreSQL para operar datos reales.</span></div>}
     <div class="toolbar"><label class="search"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="provider-search" type="search" placeholder="Buscar proveedor, ciudad o categoría" /></label><select class="filter-select" id="status-filter" aria-label="Filtrar por estado"><option value="all">Todos los estados</option><option value="candidate">Candidatos</option><option value="under_review">En revisión</option><option value="approved">Aprobados</option><option value="rejected">Rechazados</option></select><select class="filter-select" id="channel-filter" aria-label="Filtrar por canal"><option value="all">Todos los canales</option><option value="email">Correo corporativo</option><option value="whatsapp">WhatsApp</option></select></div>
     <section class="panel table-panel" id="importar"><div class="panel-head"><span><strong>Proveedores encontrados</strong> · {data.providers.length} visibles</span><span>Ordenados por última actividad</span></div><div class="table-wrap"><table class="data-table" id="providers-table"><thead><tr><th>Proveedor</th><th>Ciudad / categoría</th><th>Calificación</th><th>Canal</th><th>Origen</th><th>Estado</th><th></th></tr></thead><tbody>{data.providers.map((provider) => <tr data-search={`${provider.display_name} ${provider.city} ${provider.category}`.toLowerCase()} data-status={provider.status} data-channel={provider.contact_channel}><td><a class="provider-link" href={`/proveedores/${provider.provider_id}`}>{provider.display_name}</a><div class="muted">ID {provider.provider_id.slice(0, 8)}</div></td><td>{provider.city}<div class="muted">{provider.category}{provider.additional_categories?.length ? ` · +${provider.additional_categories.join(', ')}` : ''}</div></td><td><span class="rating">{provider.rating ?? '—'} <span>★</span></span><div class="muted">{provider.review_count ?? '—'} reseñas{provider.platform_count > 1 && ` · +${provider.platform_count - 1} plataforma${provider.platform_count - 1 === 1 ? '' : 's'} más`}</div></td><td><span class={`channel-badge channel-${provider.contact_channel}`}>{provider.contact_channel === 'email' ? 'Correo' : 'WhatsApp'}</span></td><td class="muted">{provider.discovery_source ?? '—'}</td><td><StatusBadge status={provider.status} /></td><td><a class="text-link" href={`/proveedores/${provider.provider_id}`}>Abrir</a></td></tr>)}</tbody></table></div></section>
-    <section class="agent-card" id="buscar"><div class="agent-copy"><div class="agent-kicker"><span class="agent-pulse"></span>Búsqueda de proveedores</div><h2>Traer proveedores para una categoría</h2><p>La cosecha consulta Google Places y devuelve negocios que ya traen calificación, reseñas y teléfono verificados por la API. Revisa la lista, marca los que sirvan y genera el TSV. El agente entra después, y solo para lo que la API no da: confirmar que prestan el servicio y buscar su correo.</p><form id="buscar-form" class="agent-form"><label>Ciudad<select class="form-input" name="city" required><option>Bogotá</option><option>Medellín</option><option>Cali</option><option selected>Barranquilla</option><option>Cartagena</option><option>Bucaramanga</option><option>Pereira</option><option>Manizales</option><option>Santa Marta</option><option>Armenia</option><option>Villavicencio</option></select></label><label>Categoría<select class="form-input" name="category" required><option value="">Selecciona una categoría</option><option>Lugar</option><option>Comida y Bebida</option><option>Música</option><option>Servicios Especializados</option><option>Entretenimiento</option><option>Decoración temática</option><option>Fotografía y Video</option><option>Invitación digital</option><option>Menaje y mantelería</option><option>Carpas y mobiliario</option></select></label><div class="buscar-acciones"><button class="primary-button" type="submit">Cosechar desde Places</button><button class="secondary-button" id="gemini-launch" type="button">Buscar en la web con el agente</button></div><details class="buscar-avanzado"><summary>Opciones de la búsqueda con agente</summary><label>Objetivo de candidatos <span class="muted">1–100 · máximo 20 por escaneo</span><input class="form-input" name="targetCount" type="number" min="1" max="100" value="20" /></label><label>Instrucciones adicionales <span class="muted">opcional</span><textarea class="agent-textarea" name="instructions" placeholder="Ej. prioriza negocios con portafolio para bodas"></textarea></label></details></form><p class="agent-status" id="gemini-status" role="status"></p></div><div class="harvest-result" id="harvest-result" hidden><div class="result-head"><strong>Candidatos de Places</strong><span id="harvest-count"></span></div><div class="harvest-tools"><label class="harvest-threshold">Calificación mínima<input class="form-input" id="harvest-min-rating" type="number" min="0" max="5" step="0.1" value="4.5" /></label><label class="harvest-threshold">Reseñas mínimas<input class="form-input" id="harvest-min-reviews" type="number" min="0" step="1" value="30" /></label><button class="secondary-button" id="harvest-reset-threshold" type="button">Estándar</button><button class="secondary-button" id="harvest-select-all" type="button">Marcar visibles</button><button class="secondary-button" id="harvest-clear" type="button">Desmarcar</button></div><div class="harvest-list" id="harvest-list"></div><p class="muted harvest-visible" id="harvest-visible-count"></p><p class="muted harvest-warn">Revisa la pertinencia antes de marcar: la consulta por servicio arrastra comercio adyacente. Bajar el umbral sirve para explorar, pero la curaduría sigue exigiendo 4.5 y 30 reseñas.</p><div class="result-actions"><button class="primary-button" id="harvest-generate" type="button">Generar TSV de los marcados</button><button class="secondary-button" id="harvest-verify" type="button">Verificar con el agente</button><span class="muted" id="harvest-selected-count"></span></div><p class="muted harvest-warn">Verificar lee el sitio de cada marcado para sacar su correo e Instagram, y pide al agente que confirme el servicio. Tarda unos minutos. La calificación, las reseñas y el teléfono siguen viniendo de Places.</p></div><div class="agent-result" id="gemini-result" hidden><div class="result-head"><strong>Vista previa del agente</strong><span id="gemini-count"></span></div><p id="gemini-summary" class="muted"></p><div class="channel-summary" id="gemini-channels" hidden><p><strong id="gemini-email-count"></strong><span id="gemini-email-names"></span></p><p><strong id="gemini-whatsapp-count"></strong><span id="gemini-whatsapp-names"></span></p></div><textarea id="gemini-tsv" aria-label="TSV generado por el agente"></textarea><div class="result-actions"><button class="primary-button" id="gemini-import" type="button">Confirmar e importar</button><button class="secondary-button" id="gemini-copy" type="button">Copiar TSV</button></div><p class="muted">La validación conserva los rechazos y deja los aceptados como candidatos. No se envían mensajes.</p></div></section>
+    <section class="agent-card" id="buscar"><div class="agent-copy"><div class="agent-kicker"><span class="agent-pulse"></span>Búsqueda de proveedores</div><h2>Traer proveedores para una categoría</h2><p>Busca proveedores reales de la categoría con su calificación, reseñas y teléfono ya comprobados. Revisa la lista, marca los que te sirvan y prepara el lote: al prepararlo se completa el correo y se confirma que cada negocio presta el servicio.</p><form id="buscar-form" class="agent-form"><label>Ciudad<select class="form-input" name="city" required><option>Bogotá</option><option>Medellín</option><option>Cali</option><option selected>Barranquilla</option><option>Cartagena</option><option>Bucaramanga</option><option>Pereira</option><option>Manizales</option><option>Santa Marta</option><option>Armenia</option><option>Villavicencio</option></select></label><label>Categoría<select class="form-input" name="category" required><option value="">Selecciona una categoría</option><option>Lugar</option><option>Comida y Bebida</option><option>Música</option><option>Servicios Especializados</option><option>Entretenimiento</option><option>Decoración temática</option><option>Fotografía y Video</option><option>Invitación digital</option><option>Menaje y mantelería</option><option>Carpas y mobiliario</option></select></label><div class="buscar-acciones"><button class="primary-button" type="submit">Buscar proveedores</button><button class="secondary-button" id="gemini-launch" type="button" hidden>Ampliar la búsqueda</button></div><input type="hidden" name="targetCount" value="20" /><input type="hidden" name="instructions" value="" /></form><p class="agent-status" id="gemini-status" role="status"></p></div><div class="harvest-result" id="harvest-result" hidden><div class="result-head"><strong>Proveedores encontrados</strong><span id="harvest-count"></span></div><div class="harvest-tools"><label class="harvest-threshold">Calificación mínima<input class="form-input" id="harvest-min-rating" type="number" min="0" max="5" step="0.1" value="4.5" /></label><label class="harvest-threshold">Reseñas mínimas<input class="form-input" id="harvest-min-reviews" type="number" min="0" step="1" value="30" /></label><button class="secondary-button" id="harvest-reset-threshold" type="button">Estándar</button><button class="secondary-button" id="harvest-select-all" type="button">Marcar visibles</button><button class="secondary-button" id="harvest-clear" type="button">Desmarcar</button></div><div class="harvest-list" id="harvest-list"></div><p class="muted harvest-visible" id="harvest-visible-count"></p><p class="muted harvest-warn">Revisa que cada negocio preste de verdad el servicio antes de marcarlo: la búsqueda arrastra comercio parecido. Bajar el umbral sirve para explorar, pero la curaduría sigue exigiendo 4.5 y 30 reseñas.</p><div class="result-actions"><button class="primary-button" id="harvest-generate" type="button">Preparar lote para importar</button><span class="muted" id="harvest-selected-count"></span></div><p class="muted harvest-warn">Al preparar el lote se busca el correo y el Instagram de cada proveedor marcado y se confirma que preste el servicio. Tarda un par de minutos. Su calificación, reseñas y teléfono ya están comprobados.</p></div><div class="agent-result" id="gemini-result" hidden><div class="result-head"><strong>Proveedores encontrados</strong><span id="gemini-count"></span></div><p id="gemini-summary" class="muted"></p><div class="channel-summary" id="gemini-channels" hidden><p><strong id="gemini-email-count"></strong><span id="gemini-email-names"></span></p><p><strong id="gemini-whatsapp-count"></strong><span id="gemini-whatsapp-names"></span></p></div><textarea id="gemini-tsv" aria-label="Lote de proveedores encontrados"></textarea><div class="result-actions"><button class="primary-button" id="gemini-import" type="button">Confirmar e importar</button><button class="secondary-button" id="gemini-copy" type="button">Copiar el lote</button></div><p class="muted">La validación conserva los rechazos y deja los aceptados como candidatos. No se envían mensajes.</p></div></section>
     <section class="import-card"><div><h2>Importar desde curaduría</h2><p>Pega el bloque TSV de 20 columnas generado por el prompt v2.10. El importador deduplica por fuente y conserva la evidencia original.</p></div><form action="/api/providers/import" method="post"><textarea name="tsv" placeholder="Pega aquí el TSV…" aria-label="Bloque TSV"></textarea><button class="primary-button" type="submit">Validar lote</button></form></section>
   </div>
 </AppLayout>
@@ -433,8 +433,6 @@ const data = await getDashboard();
   function refreshSelectedCount() {
     if (harvestSelectedCount) harvestSelectedCount.textContent = harvestSelected.size ? `${harvestSelected.size} marcado${harvestSelected.size === 1 ? '' : 's'}` : 'Ninguno marcado';
     if (harvestGenerate) harvestGenerate.disabled = harvestSelected.size === 0;
-    const verifyButton = document.querySelector<HTMLButtonElement>('#harvest-verify');
-    if (verifyButton) verifyButton.disabled = harvestSelected.size === 0;
   }
 
   function currentThreshold() {
@@ -522,8 +520,15 @@ const data = await getDashboard();
       if (!body.ok) throw new Error(body.error ?? 'No se pudo cosechar.');
       harvestCandidates = body.candidates as HarvestCandidate[];
       const meets = harvestCandidates.filter(meetsCurationStandard).length;
-      if (harvestCount) harvestCount.textContent = `${harvestCandidates.length} · ${meets} sobre umbral · ${body.apiCalls} llamadas en ${Math.round(body.durationMs / 100) / 10}s`;
-      if (harvestStatus) harvestStatus.textContent = `${harvestCandidates.length} candidatos en ${harvestCategory} · ${harvestCity}.`;
+      if (harvestCount) harvestCount.textContent = `${harvestCandidates.length} encontrados · ${meets} sobre umbral`;
+      if (!harvestCandidates.length) {
+        // Places no cubre esta categoria en esta ciudad. Se amplia solo, sin convertirlo en una
+        // decision del operador: el resultado es el mismo listado, venga de donde venga.
+        if (harvestStatus) harvestStatus.textContent = 'Sin resultados directos; ampliando la búsqueda…';
+        document.querySelector<HTMLButtonElement>('#gemini-launch')?.click();
+        return;
+      }
+      if (harvestStatus) harvestStatus.textContent = `${harvestCandidates.length} proveedores en ${harvestCategory} · ${harvestCity}.`;
       document.querySelector('#gemini-result')?.setAttribute('hidden', '');
       harvestResult?.removeAttribute('hidden');
       renderHarvest();
@@ -532,16 +537,12 @@ const data = await getDashboard();
     }
   });
 
-  const harvestVerify = document.querySelector<HTMLButtonElement>('#harvest-verify');
 
   async function buildTsv(verify: boolean) {
     if (!harvestSelected.size) return;
     if (harvestGenerate) harvestGenerate.disabled = true;
-    if (harvestVerify) harvestVerify.disabled = true;
     if (harvestStatus) {
-      harvestStatus.textContent = verify
-        ? `Verificando ${harvestSelected.size} candidatos con el agente. Puede tardar unos minutos...`
-        : 'Generando TSV...';
+      harvestStatus.textContent = `Preparando ${harvestSelected.size} proveedor${harvestSelected.size === 1 ? '' : 'es'}: buscando su correo y confirmando el servicio. Puede tardar un par de minutos...`;
     }
     try {
       const response = await fetch('/api/providers/harvest', {
@@ -549,31 +550,31 @@ const data = await getDashboard();
         body: JSON.stringify({ city: harvestCity, category: harvestCategory, placeIds: [...harvestSelected], verify }),
       });
       const body = await response.json();
-      if (!body.ok) throw new Error(body.error ?? 'No se pudo generar el TSV.');
+      if (!body.ok) throw new Error(body.error ?? 'No se pudo preparar el lote.');
       if (importTextarea) {
         importTextarea.value = body.tsv;
         importTextarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
         importTextarea.focus();
       }
-      const partes = [`TSV con ${body.rows} fila${body.rows === 1 ? '' : 's'} listo abajo. Revisalo y pulsa "Validar lote".`];
+      const partes = [`Lote de ${body.rows} proveedor${body.rows === 1 ? '' : 'es'} listo abajo. Revisalo y pulsa "Validar lote".`];
       if (body.verification) {
         const v = body.verification;
-        partes.push(`El agente verifico ${v.verificados}: ${v.pertinentes} pertinentes, ${v.conCorreo} con correo, ${v.conInstagram} con Instagram.`);
-        if (body.unconfirmed) partes.push(`${body.unconfirmed} quedaron marcados para revisar: el agente no pudo confirmar el servicio.`);
-        if (v.error) partes.push(`Aviso de verificacion: ${v.error}.`);
+        partes.push(`${v.conCorreo} con correo y ${v.conInstagram} con Instagram.`);
+        if (body.unconfirmed) partes.push(`${body.unconfirmed} quedaron marcados para revisar: no se pudo confirmar que presten el servicio.`);
+        if (v.error) partes.push('No se pudo completar la confirmacion del servicio; revisa el lote antes de importar.');
       }
-      if (body.skipped) partes.push(`${body.skipped} se omitieron por falta de reputacion o URL.`);
+      if (body.skipped) partes.push(`${body.skipped} se omitieron por no tener reputacion publica.`);
       if (harvestStatus) harvestStatus.textContent = partes.join(' ');
     } catch (error) {
-      if (harvestStatus) harvestStatus.textContent = error instanceof Error ? error.message : 'No se pudo generar el TSV.';
+      if (harvestStatus) harvestStatus.textContent = error instanceof Error ? error.message : 'No se pudo preparar el lote.';
     } finally {
-      if (harvestVerify) harvestVerify.disabled = harvestSelected.size === 0;
       refreshSelectedCount();
     }
   }
 
-  harvestGenerate?.addEventListener('click', () => buildTsv(false));
-  harvestVerify?.addEventListener('click', () => buildTsv(true));
+  // Una sola accion: preparar el lote siempre completa el contacto y confirma el servicio. Dejarlo
+  // como dos botones obligaba al operador a conocer el mecanismo para elegir bien.
+  harvestGenerate?.addEventListener('click', () => buildTsv(true));
 
   refreshSelectedCount();
 
