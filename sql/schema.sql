@@ -9,6 +9,10 @@ CREATE TABLE IF NOT EXISTS marketplace.providers (
   legal_name text,
   display_name text NOT NULL,
   category text NOT NULL,
+  -- Categorías adicionales reales según los servicios que el negocio ofrece (ej. un hotel que
+  -- también hace catering y eventos de entretenimiento). `category` sigue siendo la principal:
+  -- define el ID, el dedupe_key y el umbral de reputación exigido.
+  additional_categories text[] NOT NULL DEFAULT '{}',
   city text NOT NULL,
   country_code char(2) NOT NULL DEFAULT 'CO',
   website_url text,
@@ -93,7 +97,6 @@ CREATE TABLE IF NOT EXISTS marketplace.campaigns (
   body_text text NOT NULL DEFAULT '',
   sender_email text NOT NULL CHECK (sender_email = lower(sender_email)),
   reply_to_email text CHECK (reply_to_email IS NULL OR reply_to_email = lower(reply_to_email)),
-  ses_configuration_set text,
   scheduled_at timestamptz,
   started_at timestamptz,
   completed_at timestamptz,
@@ -109,7 +112,7 @@ CREATE TABLE IF NOT EXISTS marketplace.campaign_sends (
   provider_id uuid REFERENCES marketplace.providers(provider_id) ON DELETE SET NULL,
   status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','sending','sent','delivered','bounced','complaint','failed','suppressed','opted_out')),
   tracking_token_hash text NOT NULL UNIQUE CHECK (tracking_token_hash ~ '^[0-9a-f]{64}$'),
-  ses_message_id text,
+  provider_message_id text,
   queued_at timestamptz NOT NULL DEFAULT now(),
   sent_at timestamptz,
   last_event_at timestamptz,
@@ -176,6 +179,58 @@ CREATE TABLE IF NOT EXISTS marketplace.registration_submissions (
   CHECK (marketing_consent = false OR marketing_consent_at IS NOT NULL)
 );
 
+-- Fase 2: el enlace del correo caduca y el formulario se envia una sola vez.
+-- `token_expires_at` nulo significa un envio anterior a esta migracion: se trata como vigente para
+-- no invalidar enlaces ya repartidos.
+ALTER TABLE marketplace.campaign_sends
+  ADD COLUMN IF NOT EXISTS token_expires_at timestamptz,
+  ADD COLUMN IF NOT EXISTS form_submitted_at timestamptz;
+
+-- Lo que el proveedor declara sobre si mismo. Productos en lista abierta; servicios acotados a las
+-- 10 categorias oficiales; volumen como rango de asistentes, del que se deriva la Escala de
+-- curaduria sin pedirle al proveedor que entienda esa clasificacion interna.
+ALTER TABLE marketplace.registration_submissions
+  ADD COLUMN IF NOT EXISTS products text[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS services text[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS volume_min integer,
+  ADD COLUMN IF NOT EXISTS volume_max integer;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'registration_submissions_products_check'
+      AND conrelid = 'marketplace.registration_submissions'::regclass
+  ) THEN
+    ALTER TABLE marketplace.registration_submissions
+      ADD CONSTRAINT registration_submissions_products_check
+      CHECK (cardinality(products) <= 10);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'registration_submissions_services_check'
+      AND conrelid = 'marketplace.registration_submissions'::regclass
+  ) THEN
+    ALTER TABLE marketplace.registration_submissions
+      ADD CONSTRAINT registration_submissions_services_check
+      CHECK (cardinality(services) <= 5);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'registration_submissions_volume_check'
+      AND conrelid = 'marketplace.registration_submissions'::regclass
+  ) THEN
+    ALTER TABLE marketplace.registration_submissions
+      ADD CONSTRAINT registration_submissions_volume_check
+      CHECK (
+        (volume_min IS NULL AND volume_max IS NULL)
+        OR (volume_min >= 1 AND volume_max >= volume_min AND volume_max <= 100000)
+      );
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS marketplace.audit_log (
   audit_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   actor_id text,
@@ -235,7 +290,7 @@ CREATE INDEX IF NOT EXISTS ix_providers_status_city_category ON marketplace.prov
 CREATE INDEX IF NOT EXISTS ix_provider_sources_provider ON marketplace.provider_sources (provider_id);
 CREATE INDEX IF NOT EXISTS ix_contacts_consent ON marketplace.contacts (consent_status, suppressed_at);
 CREATE INDEX IF NOT EXISTS ix_campaigns_status_schedule ON marketplace.campaigns (status, scheduled_at);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_campaign_sends_ses_message ON marketplace.campaign_sends (ses_message_id) WHERE ses_message_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_campaign_sends_provider_message ON marketplace.campaign_sends (provider_message_id) WHERE provider_message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_campaign_sends_campaign_status ON marketplace.campaign_sends (campaign_id, status);
 CREATE INDEX IF NOT EXISTS ix_campaign_personalizations_status ON marketplace.campaign_personalizations (campaign_id, status);
 CREATE INDEX IF NOT EXISTS ix_email_clicks_send_time ON marketplace.email_clicks (send_id, clicked_at DESC);
