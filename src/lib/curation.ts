@@ -365,7 +365,13 @@ export function hasWhatsappPhone(fields: Pick<CurationFields, 'phone'>): boolean
 export function inferContactChannel(fields: Pick<CurationFields, 'email' | 'phone' | 'scale'>): ContactChannel {
   const hasEmail = normalizeKey(fields.email) !== 'sin dato';
   const largeCompany = fields.scale === 'Mediano (50 a 200 pers.)' || fields.scale === 'Masivo (Más de 200 pers.)';
+  // El correo corporativo manda: si el negocio tiene uno, se le escribe.
   if (hasEmail && (largeCompany || isCorporateEmail(fields))) return 'email';
+  // Sin correo corporativo, el canal natural del proveedor pequeño es WhatsApp.
+  if (hasWhatsappPhone(fields)) return 'whatsapp';
+  // Ni corporativo ni móvil: un correo gratuito es el único contacto que queda. Clasificarlo como
+  // WhatsApp lo dejaba inalcanzable, porque la validación exige un móvil que no existe.
+  if (hasEmail) return 'email';
   return 'whatsapp';
 }
 
