@@ -29,6 +29,8 @@ function readyRow(index: number, overrides: Overrides = {}) {
     `contacto@cateringlisto${index}.com`,
     `https://cateringlisto${index}.com/contacto`,
     '2026-09-18',
+    'Sin dato',
+    'Sin dato',
   ];
   for (const [position, value] of Object.entries(overrides)) cells[Number(position)] = value;
   return cells.join('\t');

@@ -20,7 +20,7 @@ export const POST: APIRoute = async ({ request }) => {
     return new Response(JSON.stringify({ ok: true, ...result }), { status: 201, headers: { 'content-type': 'application/json' } });
   } catch (error) {
     const code = error instanceof Error ? error.message : 'CAMPAIGN_FAILED';
-    const status = ['CONFIRMATION_REQUIRED', 'CAMPAIGN_FIELDS_REQUIRED', 'NO_CONTACTS_SELECTED', 'NO_ELIGIBLE_CONTACTS', 'TOO_MANY_CONTACTS', 'INVALID_CONTACT_IDS', 'SES_FROM_EMAIL_INVALID', 'SES_REPLY_TO_EMAIL_INVALID'].includes(code) ? 400 : code === 'DATABASE_NOT_CONFIGURED' ? 503 : 500;
+    const status = ['CONFIRMATION_REQUIRED', 'CAMPAIGN_FIELDS_REQUIRED', 'NO_CONTACTS_SELECTED', 'NO_ELIGIBLE_CONTACTS', 'TOO_MANY_CONTACTS', 'INVALID_CONTACT_IDS', 'OMNISEND_SENDER_EMAIL_INVALID', 'OMNISEND_REPLY_TO_EMAIL_INVALID'].includes(code) ? 400 : code === 'DATABASE_NOT_CONFIGURED' ? 503 : 500;
     return new Response(JSON.stringify({ ok: false, error: code }), { status, headers: { 'content-type': 'application/json' } });
   }
 };

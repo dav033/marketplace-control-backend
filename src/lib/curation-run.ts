@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { CURATION_HEADERS, parseCurationTsv, summarizeContactChannels, validateCurationBatch } from './curation';
-import { curateProviders, hasContactForDiscovery, type CurationLivePreview, type CurationPhaseReporter, type GeminiCurationResult } from './gemini';
+import { buildLivePreviewRows, curateProviders, hasContactForDiscovery, type CurationLivePreview, type CurationPhaseReporter, type GeminiCurationResult } from './gemini';
 import { saveCurationScan } from './curation-history';
 import { logCurationEvent } from './curation-log';
 
@@ -18,6 +18,7 @@ function buildPreview(merged: GeminiCurationResult): CurationLivePreview {
       line: row.line,
       issues: row.issues.map(item => ({ message: item.message })),
     })),
+    rows: buildLivePreviewRows(parseCurationTsv(merged.tsv)),
   };
 }
 

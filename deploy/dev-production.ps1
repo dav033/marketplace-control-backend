@@ -1,7 +1,7 @@
 param(
   [string]$HostName = "54.167.34.107",
   [string]$SshUser = "ec2-user",
-  [string]$SshKeyPath = "$env:USERPROFILE\.ssh\marketplace-aws",
+  [string]$SshKeyPath = "$env:USERPROFILE\.ssh\marketplace-eventos",
   [int]$LocalDbPort = 15432,
   [int]$AppPort = 4321
 )

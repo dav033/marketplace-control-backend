@@ -42,6 +42,8 @@ export type ConsentedContact = {
   firstName?: string | null;
   lastName?: string | null;
   customProperties?: Record<string, string | number | boolean | null>;
+  /** POST /contacts es síncrono y acepta tags en la misma llamada: no hace falta un paso aparte. */
+  tags?: string[];
 };
 
 export async function upsertConsentedContact(input: ConsentedContact) {
@@ -58,6 +60,7 @@ export async function upsertConsentedContact(input: ConsentedContact) {
     body: JSON.stringify({
       firstName: input.firstName?.trim() || undefined,
       lastName: input.lastName?.trim() || undefined,
+      tags: input.tags?.length ? input.tags : undefined,
       identifiers: [{
         type: 'email',
         id: email,
@@ -66,6 +69,72 @@ export async function upsertConsentedContact(input: ConsentedContact) {
       customProperties,
     }),
   });
+}
+
+/**
+ * Crea un segmento dinámico filtrando por un tag exacto. Se usa un tag único por envío
+ * (`send-<campaign_id>`) para que el segmento incluya exactamente el lote de esta campaña y nada más.
+ */
+export async function createTagSegment(input: { name: string; tag: string }): Promise<{ segmentID: string; status: string }> {
+  return request<{ segmentID: string; status: string }>('/segments', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: input.name.slice(0, 256),
+      conditionGroups: [{
+        conditions: [{
+          entity: 'contact',
+          junction: 'and',
+          filters: [{ operator: 'anyOf', property: 'tags', value: [input.tag] }],
+        }],
+      }],
+    }),
+  });
+}
+
+export async function getSegment(segmentId: string): Promise<{ segmentID: string; status: 'building' | 'ready' | 'archived' }> {
+  return request<{ segmentID: string; status: 'building' | 'ready' | 'archived' }>(`/segments/${segmentId}`);
+}
+
+/**
+ * Un segmento nuevo pasa por `building` mientras Omnisend calcula su membresía; solo en `ready` es
+ * seguro asumir que ya incluye los contactos recién etiquetados. Sin esta espera, la campaña real
+ * podría lanzarse a una audiencia vacía o incompleta.
+ */
+export async function waitForSegmentReady(segmentId: string, options: { timeoutMs?: number; intervalMs?: number } = {}): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  const intervalMs = options.intervalMs ?? 2_000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const segment = await getSegment(segmentId);
+    if (segment.status === 'ready') return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('OMNISEND_SEGMENT_NOT_READY');
+}
+
+export type CampaignStatistics = { delivered: number; opened: number; clicked: number; bounced: number };
+
+/** Límite documentado: 10 solicitudes/minuto y 55/24h. Llamar solo bajo demanda, nunca en cada carga de página. */
+export async function getCampaignStatistics(campaignId: string): Promise<CampaignStatistics> {
+  const body = await request<{ statistics: Array<{ rows: Array<Record<string, number>> }> }>('/analytics/statistics', {
+    method: 'POST',
+    body: JSON.stringify({
+      queries: [{
+        alias: 'campaign_stats',
+        dateRange: { from: '2020-01-01T00:00:00Z', to: new Date().toISOString() },
+        dimensions: [],
+        metrics: [{ name: 'delivered' }, { name: 'opened' }, { name: 'clicked' }, { name: 'bounced' }],
+        filters: [{ name: 'campaignId', operator: 'equals', values: [campaignId] }],
+      }],
+    }),
+  });
+  const row = body.statistics?.[0]?.rows?.[0] ?? {};
+  return {
+    delivered: Number(row.delivered) || 0,
+    opened: Number(row.opened) || 0,
+    clicked: Number(row.clicked) || 0,
+    bounced: Number(row.bounced) || 0,
+  };
 }
 
 export async function createEmailCampaignDraft(input: {
