@@ -1278,7 +1278,45 @@ async function enrichMissingReputationWithGooglePlaces(tsv: string, city: string
   return [header, ...updatedRows].join('\n');
 }
 
-export async function curateProviders(input: { city: string; category: string; instructions?: string; targetCount?: number; scanAttempt?: number; jobId?: string; runId?: string; onPhase?: CurationPhaseReporter }): Promise<GeminiCurationResult> {
+/**
+ * Deja fuera del lote lo que no alcanza el umbral que pidio el operador.
+ *
+ * El prompt ya lleva el umbral, pero orientar al agente no es lo mismo que garantizarlo: vuelve con
+ * negocios por debajo igualmente. Se filtra tambien lo que no tiene reputacion comprobable, porque
+ * un "Sin dato" no puede demostrar que cumple, y el operador pidio no ver nada fuera del rango.
+ * Se devuelven los conteos por separado para poder decirle cuantos se fueron y por que.
+ */
+export function filterByReputationThreshold(
+  tsv: string,
+  minRating: number,
+  minReviews: number,
+): { tsv: string; removed: number; belowThreshold: number; withoutReputation: number } {
+  const lines = tsv.replace(/\r\n?/g, '\n').split('\n');
+  const header = lines[0] ?? '';
+  const rows = lines.slice(1).filter(line => line.trim());
+  // Sin umbral efectivo no se toca el lote: filtrar seria quitar filas sin que nadie lo pidiera.
+  if (minRating <= 0 && minReviews <= 0) {
+    return { tsv, removed: 0, belowThreshold: 0, withoutReputation: 0 };
+  }
+  let belowThreshold = 0;
+  let withoutReputation = 0;
+  const kept = rows.filter(line => {
+    const cells = line.split('\t');
+    const rating = Number((cells[8] ?? '').trim().replace(',', '.'));
+    const reviews = Number((cells[9] ?? '').trim());
+    if (!Number.isFinite(rating) || !Number.isFinite(reviews)) { withoutReputation += 1; return false; }
+    if (rating < minRating || reviews < minReviews) { belowThreshold += 1; return false; }
+    return true;
+  });
+  return {
+    tsv: [header, ...kept].join('\n'),
+    removed: rows.length - kept.length,
+    belowThreshold,
+    withoutReputation,
+  };
+}
+
+export async function curateProviders(input: { city: string; category: string; instructions?: string; targetCount?: number; scanAttempt?: number; jobId?: string; runId?: string; minRating?: number; minReviews?: number; onPhase?: CurationPhaseReporter }): Promise<GeminiCurationResult> {
   const configuredProvider = String(env('CURATION_PROVIDER') || 'gemini').trim().toLowerCase();
   const provider: 'gemini' | 'claude-code' | 'codex' = configuredProvider === 'claude-code'
     ? 'claude-code'
@@ -1292,6 +1330,16 @@ export async function curateProviders(input: { city: string; category: string; i
     : provider === 'codex'
       ? env('CODEX_MODEL') || 'gpt-5.6-luna'
       : env('GEMINI_AGENT_MODEL') || 'gemini-3.8-flash';
+  // Umbral de reputacion que pide el operador. Se usa en dos sitios: en el prompt, para que el
+  // agente no gaste escaneos en negocios que van a caer, y al filtrar el lote, porque el prompt
+  // orienta pero no garantiza. Los valores por defecto son el estandar de curaduria.
+  const minRating = Number.isFinite(input.minRating)
+    ? Math.min(5, Math.max(0, Math.round((input.minRating as number) * 10) / 10))
+    : 4.5;
+  const minReviews = Number.isFinite(input.minReviews)
+    ? Math.max(0, Math.min(100000, Math.trunc(input.minReviews as number)))
+    : 30;
+  const minRatingText = minRating.toFixed(1);
   const city = input.city.trim();
   const category = input.category.trim();
   if (!city || !category) throw new Error('CITY_AND_CATEGORY_REQUIRED');
@@ -1356,7 +1404,7 @@ Trabaja sobre esta lista primero. Tu tarea con ellos NO es descubrirlos sino ver
 Investiga en la web proveedores reales de la ciudad "${city}" para la categoría "${category}".${harvestBlock}
 ${input.instructions?.trim() ? `Instrucciones adicionales del operador: ${input.instructions.trim()}` : ''}
 
-  ${discoveryInstruction} Un candidato listo debe cumplir calificación mínima 4.5, reseñas mínimas, evidencia reciente y contacto público. Un prospecto para revisión debe tener identidad, servicio y contacto público confirmados en una fuente viva, pero puede tener calificación menor, menos reseñas o reputación sin confirmar: conserva "Sin dato" cuando corresponda, explica exactamente qué falta y no inventes valores. La aplicación lo mostrará como "Requiere revisión" y no lo importará como válido hasta corregirlo. No incluyas negocios sin contacto público o con todas sus fuentes inaccesibles. ${budgetInstruction} Si no hay suficientes fuentes, devuelve solo negocios reales y explica el déficit; no inventes datos.
+  ${discoveryInstruction} Un candidato listo debe cumplir calificación mínima ${minRatingText}, al menos ${minReviews} reseñas, evidencia reciente y contacto público. Un prospecto para revisión debe tener identidad, servicio y contacto público confirmados en una fuente viva, pero puede tener calificación menor, menos reseñas o reputación sin confirmar: conserva "Sin dato" cuando corresponda, explica exactamente qué falta y no inventes valores. La aplicación lo mostrará como "Requiere revisión" y no lo importará como válido hasta corregirlo. No incluyas negocios sin contacto público o con todas sus fuentes inaccesibles. ${budgetInstruction} Si no hay suficientes fuentes, devuelve solo negocios reales y explica el déficit; no inventes datos.
 Usa exactamente estos valores controlados y no inventes etiquetas: Segmento = "Bajo Costo", "Premium" o "Sin clasificar"; Zona Estandarizada = "Zona Norte / Comercial Alta", "Zona Centro / Tradicional", "Zona Sur / Occidente Comercial", "Zona Campestre / Periferia", "Área Metropolitana", "Cobertura Nacional" o "Sin dato"; Escala = "Pequeño (Hasta 50 pers.)", "Mediano (50 a 200 pers.)", "Masivo (Más de 200 pers.)" o "Sin dato"; Formalidad = "Formalizado (NIT - Empresa)", "Independiente (RUT - Persona Natural)" o "No verificado"; Nivel Curaduría = "A" o "B".
 Usa únicamente negocios existentes y no inventes teléfonos, correos, calificaciones, reseñas o URLs.
 El objetivo global solicitado es ${targetCount} candidatos relevantes, pero este escaneo está limitado a 20. Si faltan candidatos, el sistema lanzará otro escaneo con la blacklist actualizada; no repitas candidatos históricos.
@@ -1366,7 +1414,7 @@ La URL debe ser la ficha o perfil directo del negocio, no una página de resulta
 ${researchToolInstruction}
 Si una URL no abre, redirige a una página inexistente, devuelve un error o no contiene evidencia del negocio, descarta ese candidato y busca otra fuente. No inventes una URL alternativa ni uses una página de resultados.
 Cruza la evidencia: confirma identidad y servicio en una fuente oficial o perfil directo, y contrasta reputación, calificación y reseñas en la plataforma indicada. La fecha de verificación debe ser la fecha actual de la investigación, no una fecha antigua de la página, y SIEMPRE en formato AAAA-MM-DD (año-mes-día, ej. "2026-09-19"); nunca DD/MM/AAAA ni ningún otro formato.
-Para un candidato listo cumple: calificación mínima 4.5 y mínimo 30 reseñas exactas, sin importar el tipo de proveedor. Los prospectos en revisión pueden quedar por debajo o usar "Sin dato", pero deben tener identidad, servicio, fuente viva y contacto comprobados.
+Para un candidato listo cumple: calificación mínima ${minRatingText} y mínimo ${minReviews} reseñas exactas, sin importar el tipo de proveedor. Los prospectos en revisión pueden quedar por debajo o usar "Sin dato", pero deben tener identidad, servicio, fuente viva y contacto comprobados.
 Nivel A corresponde a 50 o más reseñas. Nivel B se usa para 30 a 49 reseñas y también para cualquier prospecto en revisión cuya reputación no pudo confirmarse.
 La reputación visible es obligatoria cuando existe: no te limites a Google. Busca activamente en Google, Tripadvisor, Booking, Rappi, DiDi (o DiDi Food) y Facebook — cualquier plataforma donde el negocio tenga reseñas públicas cuenta igual. Registra la calificación exacta, la cantidad de reseñas y la plataforma exacta donde las encontraste. Solo usa "Sin dato" en calificación y reseñas cuando realmente no haya reputación pública localizable en ninguna de estas plataformas, y explícalo en la justificación. No inventes ni aproximes estos valores.
 Solo esas 6 plataformas cuentan como reputación verificable. NUNCA cites un directorio agregador (Cybo, TodosNegocios, PaginasAmarillas, Guía Local o similares) como "Plataforma Reputación" o dentro de "Reputación Multiplataforma": esos sitios scrapean datos de otras fuentes y no son confiables. Si solo encuentras el dato en un agregador, trátalo como si no lo hubieras encontrado y usa "Sin dato".
@@ -1396,7 +1444,7 @@ Devuelve un objeto JSON válido con exactamente dos campos: "tsv" y "research_su
 TASK: Research REAL, currently operating businesses in the city "${city}" for the category "${category}", using your built-in web_search tool.
 ${input.instructions?.trim() ? `Additional operator instructions: ${input.instructions.trim()}` : ''}
 
-${codexDiscoveryInstruction} A "ready" candidate must meet: minimum rating 4.5, minimum review count, recent public evidence, and public contact info. A "review" prospect must have confirmed identity, service, a live source, and public contact, but may have a lower rating, fewer reviews, or unconfirmed reputation: keep "Sin dato" when that applies, explain exactly what is missing, and never invent values. The application will show it as "Requiere revisión" and will not import it until it is fixed. Do not include any business without public contact info or with only unreachable sources. If you cannot find enough sources, return only real businesses and explain the shortfall; never invent data.
+${codexDiscoveryInstruction} A "ready" candidate must meet: minimum rating ${minRatingText}, at least ${minReviews} reviews, recent public evidence, and public contact info. A "review" prospect must have confirmed identity, service, a live source, and public contact, but may have a lower rating, fewer reviews, or unconfirmed reputation: keep "Sin dato" when that applies, explain exactly what is missing, and never invent values. The application will show it as "Requiere revisión" and will not import it until it is fixed. Do not include any business without public contact info or with only unreachable sources. If you cannot find enough sources, return only real businesses and explain the shortfall; never invent data.
 
 MANDATORY REPUTATION VERIFICATION PROTOCOL — follow this for every business before deciding to include it in your final answer. No exceptions, regardless of how confident you already are:
 1. Once you have a candidate business (name + evidence of service + public contact), run ONE ADDITIONAL, DEDICATED web_search query just for its reputation, for example: "<business name>" ${city} reseñas Google, or "<business name>" opiniones, or "<business name>" rating reviews. Do this even if an earlier, more general search already showed a rating — confirm it with a targeted query before you finalize the candidate.
@@ -1590,7 +1638,12 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
   if (!rawTsv) throw new Error(provider === 'gemini' ? 'GEMINI_NO_ROWS' : provider === 'codex' ? 'CODEX_NO_ROWS' : 'CLAUDE_CODE_NO_ROWS');
   const baseTsv = limitCurationTsvRows(normalizeKnownSourceUrls(rawTsv));
   const withFallbackCandidates = appendFallbackCandidates(baseTsv, discoveredCandidates, city, category, runContext);
-  const tsv = await enrichMissingReputationWithGooglePlaces(withFallbackCandidates, city, runContext);
+  const enriched = await enrichMissingReputationWithGooglePlaces(withFallbackCandidates, city, runContext);
+  const filtered = filterByReputationThreshold(enriched, minRating, minReviews);
+  const tsv = filtered.tsv;
+  if (filtered.removed) {
+    logCurationEvent('threshold_filter', { ...runContext, minRating, minReviews, removidos: filtered.removed, bajoUmbral: filtered.belowThreshold, sinReputacion: filtered.withoutReputation } as never);
+  }
   const parsedBatch = parseCurationTsv(tsv);
   const validation = validateCurationBatch(parsedBatch);
   // "Descubiertos" son las filas que realmente quedaron en el lote. Contar aquí el roster
