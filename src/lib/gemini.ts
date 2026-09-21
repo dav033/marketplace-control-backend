@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { CURATION_HEADERS, isCorporateEmail, parseCurationTsv, parseMultiPlatformReputation, summarizeContactChannels, validateCurationBatch } from './curation';
-import { curationCandidateKey, getCurationBlacklist, type CurationBlacklistEntry } from './curation-history';
+import { curationCandidateKey, getCurationBlacklist, getExistingProviders, type CurationBlacklistEntry, type ExistingProvider } from './curation-history';
 import { currentCurationContext, logClaudeRun, logCurationEvent, redactCommand, type ClaudeRunContext, type ClaudeRunRole } from './curation-log';
 import { isGooglePlacesConfigured, lookupGooglePlaceReputation, toDomain, toE164Colombia } from './google-places';
 import { formatHarvestForPrompt, harvestCategoryCandidates, hasHarvestQueries, isContactable, type HarvestedPlace } from './places-harvest';
@@ -1306,6 +1306,8 @@ export async function completeBatchFromHarvest(input: {
   minRating: number;
   minReviews: number;
   targetCount: number;
+  /** Proveedores que ya estan en la base: no deben volver a entrar en el lote. */
+  existing?: ExistingProvider[];
 }): Promise<{ tsv: string; added: number; withEmail: number }> {
   const lines = input.tsv.replace(/\r\n?/g, '\n').split('\n');
   const header = lines[0] ?? '';
@@ -1315,6 +1317,11 @@ export async function completeBatchFromHarvest(input: {
 
   const seenNames = new Set<string>();
   const seenPhones = new Set<string>();
+  // Los que ya estan en la base entran al deduplicado como si ya estuvieran en el lote.
+  for (const provider of input.existing ?? []) {
+    seenNames.add(normalizePromptKey(provider.displayName));
+    if (provider.phoneKey.length >= 10) seenPhones.add(provider.phoneKey);
+  }
   for (const line of rows) {
     const cells = line.split('\t');
     seenNames.add(normalizePromptKey(cells[1] ?? ''));
@@ -1445,8 +1452,26 @@ export async function curateProviders(input: { city: string; category: string; i
     input.jobId ? { jobId: input.jobId, scanNumber: scanAttempt, role: 'single' } : undefined,
   );
   const historicalBlacklist = await getCurationBlacklist(city, category, input.runId);
-  const blacklistInstruction = historicalBlacklist.length
-    ? `\nLISTA DE NOMBRES YA PROCESADOS (aprobados y rechazados en escaneos anteriores para esta ciudad/categoría). No los vuelvas a buscar ni incluir; busca alternativas nuevas. Solo se envían nombres para reducir ruido; el servidor aplica la lista completa, incluidos URLs y motivos, antes de verificar:\n${compactBlacklistForPrompt(historicalBlacklist)}\n`
+  // Lo que ya esta en la base tambien se excluye. La blacklist historica solo cubre lo que
+  // paso por un escaneo; un proveedor importado por otra via no aparece ahi y se volveria a
+  // buscar, gastando el escaneo para llegar a alguien que ya tenemos.
+  const existentes = await getExistingProviders(city);
+  const blacklistConExistentes: CurationBlacklistEntry[] = [
+    ...historicalBlacklist,
+    ...existentes.map(provider => ({
+      candidateKey: provider.candidateKey,
+      displayName: provider.displayName,
+      category,
+      city,
+      sourceUrl: provider.website,
+      status: 'accepted' as const,
+      reasonCodes: ['ya_registrado'],
+      reasons: ['Ya está en la base de proveedores.'],
+      runId: null,
+    })),
+  ];
+  const blacklistInstruction = blacklistConExistentes.length
+    ? `\nLISTA DE NOMBRES YA PROCESADOS (aprobados y rechazados en escaneos anteriores para esta ciudad/categoría). No los vuelvas a buscar ni incluir; busca alternativas nuevas. Solo se envían nombres para reducir ruido; el servidor aplica la lista completa, incluidos URLs y motivos, antes de verificar:\n${compactBlacklistForPrompt(blacklistConExistentes)}\n`
     : '\nNo hay candidatos históricos en la base de datos para esta ciudad y categoría; todos los resultados deben ser nuevos.\n';
   input.onPhase?.('preparing', `Preparando búsqueda para ${city} · ${category}.`);
   const researchToolInstruction = provider === 'claude-code'
@@ -1530,7 +1555,7 @@ Devuelve un objeto JSON válido con exactamente dos campos: "tsv" y "research_su
   // no hacía una búsqueda dedicada de reputación por cada candidato final antes de responder. Este
   // protocolo lo vuelve un paso obligatorio y numerado en vez de una recomendación entre párrafos.
   const codexBlacklistInstruction = historicalBlacklist.length
-    ? `\nALREADY-PROCESSED NAMES (accepted or rejected in previous scans for this city/category). Do not search for or include them again; find new alternatives. Only names are sent here to reduce noise; the server applies the full list, including URLs and reasons, before verifying:\n${compactBlacklistForPrompt(historicalBlacklist)}\n`
+    ? `\nALREADY-PROCESSED NAMES (accepted or rejected in previous scans for this city/category). Do not search for or include them again; find new alternatives. Only names are sent here to reduce noise; the server applies the full list, including URLs and reasons, before verifying:\n${compactBlacklistForPrompt(blacklistConExistentes)}\n`
     : '\nThere are no historical candidates in the database yet for this city and category; every result must be new.\n';
   const codexDiscoveryInstruction = isBroadFoodDiscovery
     ? `This is a broad scan, scan number ${scanAttempt}. Systematically cover restaurants for events, catering, banquet halls, bakeries/pastry, brunch spots, and corporate catering. Do not confuse a "ready candidate" with a "discovered prospect": prospects with confirmed contact and service must be returned even if their reputation still needs review. Do not invent data or force a quota; return every real business you can support with live sources, up to 20 in this scan.`
@@ -1605,7 +1630,7 @@ Usa "Sin dato" cuando algo no esté publicado. Incluye candidatos aunque no teng
       const discovery = parseJsonEnvelope<{ candidates?: unknown[] }>(discoveryRun.output);
       const roster = discovery?.candidates
         ?.filter((candidate): candidate is Record<string, unknown> => Boolean(candidate && typeof candidate === 'object'))
-        .filter(candidate => !candidateIsBlacklisted(candidate, historicalBlacklist, city, category))
+        .filter(candidate => !candidateIsBlacklisted(candidate, blacklistConExistentes, city, category))
         .slice(0, MAX_CURATION_CANDIDATES) ?? [];
       if (!roster.length) throw new Error('CLAUDE_CODE_DESCUBRIMIENTO_VACIO: la búsqueda no devolvió ningún negocio nuevo para esta ciudad y categoría.');
       logCurationEvent('discovery_done', {
@@ -1741,6 +1766,7 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
   // negocios que cumplen el umbral y tienen ficha publica.
   const completed = await completeBatchFromHarvest({
     tsv: filtered.tsv, places: harvestedPlaces, city, category, minRating, minReviews, targetCount,
+    existing: existentes,
   });
   const tsv = completed.tsv;
   if (completed.added) {

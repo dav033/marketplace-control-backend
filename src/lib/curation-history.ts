@@ -67,6 +67,50 @@ export function isReleasedForRetry(
   return !currentRunId || entry.runId !== currentRunId;
 }
 
+/** Un proveedor que ya está en la base, con las señales que permiten reconocerlo otra vez. */
+export type ExistingProvider = {
+  candidateKey: string;
+  displayName: string;
+  /** Últimos diez dígitos del teléfono: la misma identidad con distinto formato. */
+  phoneKey: string;
+  website: string;
+};
+
+/**
+ * Proveedores que ya existen en la base para esa ciudad.
+ *
+ * La blacklist histórica solo conoce lo que pasó por un escaneo; un proveedor importado por otra
+ * vía —el completado desde el registro oficial, o un TSV pegado a mano— no aparece ahí y se
+ * volvería a buscar. Esto consulta la tabla directamente, que es la única fuente que sabe de
+ * verdad qué hay.
+ *
+ * No se filtra por categoría a propósito: si el negocio ya está fichado, volver a investigarlo
+ * bajo otra etiqueta es gastar el mismo tiempo para llegar al mismo sitio.
+ */
+export async function getExistingProviders(city: string): Promise<ExistingProvider[]> {
+  if (!(await ensureSchema())) return [];
+  try {
+    const result = await pool!.query<{
+      display_name: string; category: string; phone: string | null; website_url: string | null;
+    }>(
+      `SELECT display_name, category, phone, website_url
+         FROM marketplace.providers
+        WHERE lower(city) = lower($1)
+          AND status <> 'archived'`,
+      [city],
+    );
+    return result.rows.map(row => ({
+      candidateKey: curationCandidateKey(row.display_name, city, row.category),
+      displayName: row.display_name,
+      phoneKey: (row.phone ?? '').replace(/\D/g, '').slice(-10),
+      website: row.website_url ?? '',
+    }));
+  } catch (error) {
+    console.error('Existing providers read failed', error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
 export async function getCurationBlacklist(city: string, category: string, runId?: string): Promise<CurationBlacklistEntry[]> {
   if (!(await ensureSchema())) return [];
   try {

@@ -76,5 +76,27 @@ const sinRegistro = await completeBatchFromHarvest({
 check('sin registro no cambia', sinRegistro.added, 0);
 check('conserva lo del agente', names(sinRegistro.tsv).length, 1);
 
+// Un proveedor que ya está en la base no vuelve a entrar, aunque el registro lo conozca y cumpla
+// el umbral: volver a traerlo es gastar una plaza del lote en alguien que ya tenemos.
+const yaEnBase = [
+  { candidateKey: 'x', displayName: 'Delicatessen Salome', phoneKey: '', website: '' },
+  { candidateKey: 'y', displayName: 'Otro cualquiera', phoneKey: '3004445566', website: '' },
+];
+const conExistentes = await completeBatchFromHarvest({
+  tsv: H,
+  places: [place('Delicatessen Salome', 4.9, 74), place('Con ese mismo móvil', 4.8, 90, '300 4445566'), place('Nuevo', 4.7, 60)],
+  targetCount: 10, existing: yaEnBase, ...base,
+});
+check('excluye por nombre ya registrado', names(conExistentes.tsv).includes('Delicatessen Salome'), false);
+check('excluye por teléfono ya registrado', names(conExistentes.tsv).includes('Con ese mismo móvil'), false);
+check('deja pasar al que no está', names(conExistentes.tsv).join(), 'Nuevo');
+check('solo añade uno', conExistentes.added, 1);
+
+// Sin lista de existentes el comportamiento no cambia.
+const sinExistentes = await completeBatchFromHarvest({
+  tsv: H, places: [place('Delicatessen Salome', 4.9, 74)], targetCount: 10, ...base,
+});
+check('sin lista, no excluye nada', sinExistentes.added, 1);
+
 if (failed) { console.log(`curation complete tests: ${failed} fallos`); process.exit(1); }
 console.log('curation complete tests passed');
