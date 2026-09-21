@@ -29,8 +29,12 @@ function flush() {
   writeFileSync(outPath, JSON.stringify({ city, targetCount, elapsedMs: Date.now() - startedAt, results }, null, 2));
 }
 
-for (const arm of ['sin-cosecha', 'con-cosecha']) {
-  process.env.CURATION_DISABLE_HARVEST = arm === 'sin-cosecha' ? '1' : '0';
+// "solo-agente" apaga todo Google Places: sin enriquecimiento de reputación, sin punto de partida
+// y sin completado del lote. Es lo que mide cuánto aporta el modelo por sí mismo.
+for (const arm of ['solo-agente', 'con-places']) {
+  const soloAgente = arm === 'solo-agente';
+  process.env.CURATION_DISABLE_PLACES = soloAgente ? '1' : '0';
+  process.env.CURATION_DISABLE_HARVEST = soloAgente ? '1' : '0';
   for (const category of CATEGORIES) {
     const t0 = Date.now();
     try {
@@ -60,7 +64,7 @@ for (const arm of ['sin-cosecha', 'con-cosecha']) {
 
 const agg = (arm: string, f: (r: Arm) => number) => results.filter(r => r.arm === arm && r.ok).reduce((a, r) => a + f(r), 0);
 console.log('\n================ RESUMEN ================');
-for (const arm of ['sin-cosecha', 'con-cosecha']) {
+for (const arm of ['solo-agente', 'con-places']) {
   console.log(`${arm.padEnd(12)} acept=${agg(arm, r => r.accepted ?? 0)} repu=${agg(arm, r => r.withReputation ?? 0)} relev=${agg(arm, r => r.relevant ?? 0)} escaneos=${agg(arm, r => r.attempts ?? 0)} tiempo=${Math.round(agg(arm, r => r.durationMs) / 1000)}s`);
 }
 flush();

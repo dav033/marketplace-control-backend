@@ -111,7 +111,18 @@ export async function getExistingProviders(city: string): Promise<ExistingProvid
   }
 }
 
+/**
+ * Candidatos ya vistos en los escaneos ANTERIORES DE ESTA MISMA CORRIDA.
+ *
+ * El alcance es deliberadamente corto. Antes leía todo el historial de la ciudad y categoría, y eso
+ * envenenaba los escaneos siguientes: tras una tarde de pruebas, los doce restaurantes con más
+ * reseñas de Barranquilla estaban vetados y el agente solo encontraba negocios que nadie había
+ * calificado. Cada corrida parte de cero; lo único que se arrastra entre corridas es lo que de
+ * verdad está en la base de proveedores, y de eso se encarga `getExistingProviders`.
+ */
 export async function getCurationBlacklist(city: string, category: string, runId?: string): Promise<CurationBlacklistEntry[]> {
+  // Sin corrida no hay escaneos previos que evitar.
+  if (!runId) return [];
   if (!(await ensureSchema())) return [];
   try {
     const result = await pool!.query<{
@@ -138,9 +149,11 @@ export async function getCurationBlacklist(city: string, category: string, runId
           AND entity_type = 'curation_candidate'
           AND lower(metadata->>'city') = lower($1)
           AND lower(metadata->>'category') = lower($2)
+          AND metadata->>'run_id' = $3
         ORDER BY occurred_at DESC
-        LIMIT 1000`, [city, category]);
+        LIMIT 1000`, [city, category, runId]);
     // Candidatos liberados a mano tras corregir un fallo de validación: vuelven a estar disponibles.
+    // Liberaciones manuales: siguen valiendo, aunque con el alcance corto casi nunca hagan falta.
     const released = await pool!.query<{ candidate_key: string }>(
       `SELECT metadata->>'candidate_key' AS candidate_key
          FROM marketplace.audit_log

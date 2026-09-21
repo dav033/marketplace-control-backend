@@ -1495,8 +1495,11 @@ export async function curateProviders(input: { city: string; category: string; i
   // confirmar pertinencia y completar correo en vez de en descubrir nombres a ciegas.
   let harvestBlock = '';
   let harvestedPlaces: HarvestedPlace[] = [];
-  // CURATION_DISABLE_HARVEST=1 apaga la cosecha para poder medir el brazo de control del benchmark.
-  const harvestEnabled = String(env('CURATION_DISABLE_HARVEST') || '').trim() !== '1';
+  // Interruptores de medición. `CURATION_DISABLE_HARVEST` apaga solo el punto de partida y el
+  // completado del lote; `CURATION_DISABLE_PLACES` apaga además el enriquecimiento de
+  // reputación, dejando al agente solo. Sirven para saber cuánto aporta cada pieza.
+  const placesEnabled = String(env('CURATION_DISABLE_PLACES') || '').trim() !== '1';
+  const harvestEnabled = placesEnabled && String(env('CURATION_DISABLE_HARVEST') || '').trim() !== '1';
   if (harvestEnabled && isGooglePlacesConfigured() && hasHarvestQueries(category)) {
     try {
       const harvest = await harvestCategoryCandidates(city, category);
@@ -1759,7 +1762,9 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
   if (!rawTsv) throw new Error(provider === 'gemini' ? 'GEMINI_NO_ROWS' : provider === 'codex' ? 'CODEX_NO_ROWS' : 'CLAUDE_CODE_NO_ROWS');
   const baseTsv = limitCurationTsvRows(normalizeKnownSourceUrls(rawTsv));
   const withFallbackCandidates = appendFallbackCandidates(baseTsv, discoveredCandidates, city, category, runContext);
-  const enriched = await enrichMissingReputationWithGooglePlaces(withFallbackCandidates, city, runContext);
+  const enriched = placesEnabled
+    ? await enrichMissingReputationWithGooglePlaces(withFallbackCandidates, city, runContext)
+    : withFallbackCandidates;
   const filtered = filterByReputationThreshold(enriched, minRating, minReviews);
   // El agente manda: sus hallazgos van primero y el registro solo rellena lo que falte hasta el
   // objetivo. Sin esto el lote se quedaba en lo que el agente alcanzara, muy por debajo de los
