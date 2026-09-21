@@ -6,3 +6,7 @@ dist/
 !.env.example
 *.log
 .DS_Store
+
+# El panel vive en su propio repo (marketplace-control-frontend). Si queda una
+# copia local en esta carpeta, que nunca se vuelva a trackear por accidente.
+/frontend/
