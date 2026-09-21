@@ -1298,12 +1298,21 @@ export function filterByReputationThreshold(
   if (minRating <= 0 && minReviews <= 0) {
     return { tsv, removed: 0, belowThreshold: 0, withoutReputation: 0 };
   }
+  // La curaduria acepta reputacion repartida: si ninguna plataforma llega al minimo por si sola,
+  // dos o mas que si alcancen la calificacion y sumen el doble de resenas tambien califican.
+  // Mirar solo las columnas principales tiraba esos proveedores, que son legitimos.
+  const combinedMinPlatforms = 2;
+  const combinedMinReviews = minReviews * 2;
   let belowThreshold = 0;
   let withoutReputation = 0;
   const kept = rows.filter(line => {
     const cells = line.split('\t');
     const rating = Number((cells[8] ?? '').trim().replace(',', '.'));
     const reviews = Number((cells[9] ?? '').trim());
+    const platforms = parseMultiPlatformReputation(cells[18] ?? 'Sin dato') ?? [];
+    const qualifying = platforms.filter(entry => entry.rating >= minRating);
+    const combinedReviews = qualifying.reduce((sum, entry) => sum + entry.reviews, 0);
+    if (qualifying.length >= combinedMinPlatforms && combinedReviews >= combinedMinReviews) return true;
     if (!Number.isFinite(rating) || !Number.isFinite(reviews)) { withoutReputation += 1; return false; }
     if (rating < minRating || reviews < minReviews) { belowThreshold += 1; return false; }
     return true;
