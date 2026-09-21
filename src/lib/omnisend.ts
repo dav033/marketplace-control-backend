@@ -46,6 +46,17 @@ export type ConsentedContact = {
   tags?: string[];
 };
 
+/**
+ * Omnisend rechaza con 400 cualquier `statusChangedAt` que no esté estrictamente en el pasado según
+ * *su* reloj, y `new Date()` a secas caía justo en el borde: el envío entero moría con
+ * `invalid_value: 'statusChangedAt' must not be in the future`. Un minuto de margen absorbe el
+ * desfase entre relojes sin falsear la marca de consentimiento de forma apreciable.
+ */
+const CONSENT_CLOCK_SKEW_MS = 60_000;
+function consentTimestamp() {
+  return new Date(Date.now() - CONSENT_CLOCK_SKEW_MS).toISOString();
+}
+
 export async function upsertConsentedContact(input: ConsentedContact) {
   if (input.consentGranted !== true) throw new Error('OMNISEND_CONSENT_REQUIRED');
   const email = input.email.trim().toLowerCase();
@@ -64,7 +75,7 @@ export async function upsertConsentedContact(input: ConsentedContact) {
       identifiers: [{
         type: 'email',
         id: email,
-        channels: { email: { status: 'subscribed', statusChangedAt: new Date().toISOString() } },
+        channels: { email: { status: 'subscribed', statusChangedAt: consentTimestamp() } },
       }],
       customProperties,
     }),

@@ -10,6 +10,10 @@ const providers: Provider[] = [
     rating: 4.7, review_count: 31, contact_channel: 'whatsapp', phone: '+57 300 1234567', status: 'under_review', discovery_source: 'Prompt v2.8 · muestra', contact_email: 'pendiente', last_activity: 'Hace 2 días', platform_count: 1, additional_categories: [],
   },
   {
+    provider_id: 'demo-5', display_name: 'Muestra: Carpas Malecón', category: 'Carpas y mobiliario', city: 'Barranquilla',
+    rating: 4.5, review_count: 18, contact_channel: 'email', phone: '+57 300 1234567', status: 'unconfirmed', discovery_source: 'Prompt v2.8 · muestra', contact_email: 'registrado', last_activity: 'Hoy', platform_count: 1, additional_categories: [],
+  },
+  {
     provider_id: 'demo-3', display_name: 'Muestra: Sonido Patio', category: 'Música', city: 'Medellín',
     rating: 4.9, review_count: 87, contact_channel: 'email', phone: '+57 300 1234567', status: 'approved', discovery_source: 'Prompt v2.8 · muestra', contact_email: 'registrado', last_activity: 'Hace 4 días', platform_count: 1, additional_categories: [],
   },

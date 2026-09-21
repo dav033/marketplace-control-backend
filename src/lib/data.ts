@@ -34,7 +34,7 @@ export async function getDashboard(): Promise<DashboardData> {
       `),
       query<{ candidates: number; contacted: number; interested: number; submissions: number }>(`
         SELECT
-          (SELECT count(*)::int FROM marketplace.providers WHERE status IN ('candidate','under_review')) AS candidates,
+          (SELECT count(*)::int FROM marketplace.providers WHERE status IN ('candidate','unconfirmed','under_review')) AS candidates,
           (SELECT count(DISTINCT provider_id)::int FROM marketplace.campaign_sends WHERE status IN ('sent','delivered')) AS contacted,
           (SELECT count(DISTINCT cs.provider_id)::int FROM marketplace.campaign_sends cs JOIN marketplace.email_clicks ec ON ec.send_id = cs.send_id) AS interested,
           (SELECT count(*)::int FROM marketplace.registration_submissions WHERE submission_status NOT IN ('spam','rejected')) AS submissions
