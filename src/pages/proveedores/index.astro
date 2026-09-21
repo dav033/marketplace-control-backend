@@ -46,6 +46,7 @@ const data = await getDashboard();
   }
 
   // ---- Vista de proveedores: filtros y agrupación ----
+  let recargarVista: (() => Promise<void>) | null = null;
   const vistaCuerpo = document.querySelector<HTMLElement>('#vista-cuerpo');
   if (vistaCuerpo) {
     // Referencia no nula para el interior de las funciones: el estrechamiento no cruza el closure.
@@ -151,6 +152,18 @@ const data = await getDashboard();
       if (vfCanal) vfCanal.value = 'all';
       aplicar();
     });
+
+    // Se expone para que la importación pueda refrescar la tabla sin recargar la página ni
+    // perder los filtros que el operador tenga puestos.
+    recargarVista = async () => {
+      const html = await fetch(location.pathname, { cache: 'no-store' }).then((r) => r.text());
+      const nuevo = new DOMParser().parseFromString(html, 'text/html').querySelector('#vista-cuerpo');
+      if (!nuevo) return;
+      cuerpo.innerHTML = nuevo.innerHTML;
+      tarjetas.length = 0;
+      tarjetas.push(...cuerpo.querySelectorAll<HTMLElement>('.prov'));
+      aplicar();
+    };
 
     aplicar();
   }
@@ -492,10 +505,36 @@ const data = await getDashboard();
   importButton?.addEventListener('click', async () => {
     if (!agentTsv?.value.trim()) return;
     if (!window.confirm('¿Confirmas importar este lote? Los aceptados quedarán como candidatos y no se enviarán correos.')) return;
-    if (agentStatus) agentStatus.textContent = 'Importando lote validado…';
+    const etiquetaOriginal = importButton.textContent;
+    importButton.disabled = true;
+    importButton.textContent = 'Guardando…';
+    if (copyButton) copyButton.disabled = true;
+    if (agentStatus) agentStatus.textContent = 'Guardando los proveedores en la base de datos…';
     const response = await fetch('/api/ai/curation', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'import', tsv: agentTsv.value }) });
-    const body = await response.json();
-    if (agentStatus) agentStatus.textContent = response.ok && body.ok ? `Importación completada: ${body.imported} proveedores.` : `Importación detenida: ${body.error ?? `${body.accepted ?? 0} válidos, ${body.rejected ?? 0} rechazados.`}`;
+    let body: Record<string, unknown> = {};
+    try { body = await response.json(); } catch { body = {}; }
+
+    if (response.ok && body.ok) {
+      const importados = Number(body.imported ?? 0);
+      const rechazados = Number(body.rejected ?? 0);
+      // El lote ya está guardado: dejarlo en pantalla invita a importarlo dos veces.
+      if (agentTsv) agentTsv.value = '';
+      const resultado = document.querySelector<HTMLElement>('#gemini-result');
+      if (resultado) resultado.hidden = true;
+      if (agentStatus) {
+        agentStatus.textContent = `Guardados ${importados} proveedor${importados === 1 ? '' : 'es'}.`
+          + (rechazados ? ` ${rechazados} quedaron fuera por no pasar la validación.` : '')
+          + ' Ya aparecen en la tabla de arriba.';
+      }
+      // La tabla se refresca en el sitio, conservando los filtros puestos.
+      await recargarVista?.();
+    } else if (agentStatus) {
+      agentStatus.textContent = `No se pudo guardar: ${body.error ?? 'revisa el lote'}.`;
+    }
+
+    importButton.disabled = false;
+    importButton.textContent = etiquetaOriginal;
+    if (copyButton) copyButton.disabled = false;
   });
   copyButton?.addEventListener('click', async () => { if (agentTsv?.value) { await navigator.clipboard.writeText(agentTsv.value); if (agentStatus) agentStatus.textContent = 'TSV copiado al portapapeles.'; } });
 
