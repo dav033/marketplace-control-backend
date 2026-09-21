@@ -6,7 +6,7 @@ import { currentCurationContext, logClaudeRun, logCurationEvent, redactCommand, 
 import { isGooglePlacesConfigured, lookupGooglePlaceReputation, toDomain, toE164Colombia } from './google-places';
 import { formatHarvestForPrompt, harvestCategoryCandidates, hasHarvestQueries, isContactable, type HarvestedPlace } from './places-harvest';
 import { harvestedPlaceToRow } from './harvest-import';
-import { scrapeProviderContact } from './contact-scrape';
+import { scrapeProviderContact, type ScrapedContact } from './contact-scrape';
 
 const GEMINI_INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const MAX_CURATION_CANDIDATES = 20;
@@ -1293,6 +1293,50 @@ async function enrichMissingReputationWithGooglePlaces(tsv: string, city: string
 }
 
 /**
+ * Respaldo determinístico: si el agente dejó el correo en "Sin dato" pero sí citó una URL propia del
+ * negocio, lee esa página de verdad antes de aceptar que no hay correo.
+ *
+ * El prompt le pide al agente buscar correo antes de conformarse con WhatsApp, pero eso es una
+ * instrucción, no una garantía — un modelo puede simplemente no hacerlo (caso real: Bigfest e Imagine
+ * Estudios tenían correo corporativo publicado en su sitio y el agente los dejó en WhatsApp). Esto no
+ * reemplaza al agente, lo verifica: usa el mismo scraper que ya completa la cosecha de Places, ahora
+ * también sobre las filas que trae el propio agente. Rellenar el correo aquí basta para que
+ * `inferContactChannel` cambie el canal a CORREO solo, sin tocar nada más de la fila.
+ */
+async function fillMissingEmailsFromSourceUrls(tsv: string, context?: ClaudeRunContext): Promise<string> {
+  const lines = tsv.replace(/\r\n?/g, '\n').split('\n');
+  const header = lines[0] ?? '';
+  const rows = lines.slice(1).filter(line => line.trim());
+  const CONCURRENCY = 4;
+  let attempted = 0;
+  let filled = 0;
+  const updatedRows = new Array<string>(rows.length);
+  for (let start = 0; start < rows.length; start += CONCURRENCY) {
+    const batch = rows.slice(start, start + CONCURRENCY);
+    const results = await Promise.all(batch.map(async line => {
+      const cells = line.split('\t');
+      const emailCell = (cells[15] ?? '').trim();
+      const sourceUrl = (cells[16] ?? '').trim();
+      // Solo vale la pena leer un dominio propio del negocio: un perfil de red social no tiene
+      // /contacto que scrapear, y un agregador no es del negocio.
+      if (normalizePromptKey(emailCell) !== 'sin dato') return line;
+      if (!sourceUrl || normalizePromptKey(sourceUrl) === 'sin dato') return line;
+      if (isSocialProfileUrl(sourceUrl) || AGGREGATOR_OR_SHORTLINK_HOSTS.test(sourceUrl)) return line;
+      attempted += 1;
+      const contact = await scrapeProviderContact(sourceUrl).catch((): ScrapedContact => ({}));
+      if (!contact.email) return line;
+      filled += 1;
+      cells[15] = contact.email;
+      if (contact.instagram && normalizePromptKey((cells[14] ?? '').trim()) === 'sin redes') cells[14] = contact.instagram;
+      return cells.join('\t');
+    }));
+    for (let index = 0; index < results.length; index += 1) updatedRows[start + index] = results[index];
+  }
+  if (context && attempted) logCurationEvent('email_backfill', { ...context, attempted, filled });
+  return [header, ...updatedRows].join('\n');
+}
+
+/**
  * Deja fuera del lote lo que no alcanza el umbral que pidio el operador.
  *
  * El prompt ya lleva el umbral, pero orientar al agente no es lo mismo que garantizarlo: vuelve con
@@ -1785,13 +1829,13 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
     tsv: filtered.tsv, places: harvestedPlaces, city, category, minRating, minReviews, targetCount,
     existing: existentes,
   });
-  const tsv = completed.tsv;
   if (completed.added) {
     logCurationEvent('batch_completed', { ...runContext, anadidos: completed.added, conCorreo: completed.withEmail, delAgente: filtered.tsv.split('\n').length - 1 } as never);
   }
   if (filtered.removed) {
     logCurationEvent('threshold_filter', { ...runContext, minRating, minReviews, removidos: filtered.removed, bajoUmbral: filtered.belowThreshold, sinReputacion: filtered.withoutReputation } as never);
   }
+  const tsv = await fillMissingEmailsFromSourceUrls(completed.tsv, runContext);
   const parsedBatch = parseCurationTsv(tsv);
   const validation = validateCurationBatch(parsedBatch);
   // "Descubiertos" son las filas que realmente quedaron en el lote. Contar aquí el roster
