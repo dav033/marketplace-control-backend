@@ -782,3 +782,206 @@ d1e8b1b feat: umbral de calificación y reseñas definido por el operador
 8951696 fix: leer el correo antes de decidir el canal de contacto
 16902e2 feat: el correo gratuito entra cuando no hay corporativo ni móvil
 ```
+
+---
+
+## 30. Ajustes posteriores — 2026-09-21
+
+### La blacklist arrastraba el historial entre corridas
+
+Leía todos los candidatos vistos en la ciudad y categoría, sin límite de tiempo
+ni de ejecución, así que cada escaneo envenenaba los siguientes.
+
+Medido tras una tarde de pruebas: **460 entradas** para Barranquilla · Comida y
+Bebida, con los doce restaurantes de más reseñas de la ciudad vetados —Varadero,
+Pepe Anca, Botero's, Casa Árabe, Johnny Maracas—. El agente solo podía encontrar
+negocios que nadie había calificado, y un brazo del benchmark devolvió doce
+proveedores sin una sola reseña. Parecía fallo del modelo y era el historial.
+
+Ahora el alcance es: **los escaneos anteriores de la misma corrida**, para no
+repetir candidatos entre el primero y el segundo, y **la tabla de proveedores**,
+de la que se encarga `getExistingProviders`. Nada más.
+
+### Otros cambios
+
+- **Umbral de calificación y reseñas** definido por el operador, que viaja al
+  prompt y al filtrado del lote. Respeta la regla de reputación combinada.
+- **El registro completa el lote** del agente hasta el objetivo, deduplicando por
+  nombre y teléfono. En Comida y Bebida el agente traía 8 y el registro conocía
+  24 que cumplían.
+- **Vista de proveedores** con filtros de ciudad y categoría en jerarquía
+  superior, secciones agrupables y pestañas separadas para correo y WhatsApp.
+- **Borrado de los datos de operación** desde Configuración, con confirmación
+  escrita y constancia en el historial.
+- **Señal al importar**: el botón avisa mientras guarda, el lote se limpia al
+  terminar y la tabla se refresca sin recargar.
+- `CURATION_DISABLE_PLACES` apaga también el enriquecimiento, para poder medir al
+  agente a solas.
+
+### Lo que quedó sin resolver
+
+**Cuánto aporta el modelo frente al andamiaje.** La medición se corrió con la
+blacklist ya envenenada, así que sus ceros no significan lo que parecían. Hay que
+rehacerla ahora que el alcance está corregido: `scripts/bench-reduced.ts` mide
+los dos brazos en unos 20 minutos.
+
+**52 proveedores descartados en silencio.** En el benchmark de 10 categorías el
+filtro retiró 72 filas: 20 por no alcanzar el umbral y **52 por no tener
+reputación que acreditar**. Los primeros son una decisión del operador; los
+segundos son ignorancia, no un juicio. Conviene que entren marcados como
+«requiere revisión» en vez de desaparecer, igual que se hizo con el juicio de
+pertinencia del agente.
+
+---
+
+## 31. Plan: cableado del envío al registro confirmado
+
+Cadena completa: **se manda el correo → llega → el proveedor pulsa el enlace →
+cae en el formulario → lo rellena → el proveedor pasa a confirmado**.
+
+Buena parte ya existe. Esto detalla qué hay, qué falta y dónde tocarlo.
+
+### 31.1 Qué existe ya
+
+| Pieza | Dónde | Estado |
+|---|---|---|
+| Crear campaña y encolar envíos | `src/lib/campaigns.ts` | Hecho. Genera un token de 32 bytes por destinatario y su `token_expires_at` |
+| Plantilla y campaña en Omnisend | `src/lib/omnisend.ts` | Hecho: `importEmailTemplate`, `createEmailCampaignDraft`, `sendEmailCampaign` |
+| Envío de prueba | `src/pages/api/campaigns/qa-test.ts` | Hecho, **nunca ejecutado** |
+| Registro del clic | `src/pages/t/[token].ts` | Hecho. Inserta en `email_clicks` y redirige a `/registro/<token>` |
+| Formulario del proveedor | `src/pages/registro/[token].astro` | Hecho, con sus cuatro estados |
+| Recepción del formulario | `src/pages/api/public/form-submit.ts` | Hecho. Inserta la ficha y marca `form_submitted_at` |
+| Estadísticas de la campaña | `src/pages/api/campaigns/[campaignId]/stats.ts` | Hecho, bajo demanda |
+
+### 31.2 Los tres huecos
+
+**A · El enlace del correo no pasa por el contador de clics.**
+`campaigns.ts:87` pone `registration_url` como `${baseUrl}/registro/${token}`,
+apuntando directo al formulario. El contador vive en `/t/<token>` y nadie lo
+llama, así que `email_clicks` nunca se rellena y la métrica «Mostraron interés»
+del panel siempre marcará cero.
+
+*Arreglo:* cambiar esa línea a `${baseUrl}/t/${token}`. Una línea. Comprobar
+después que `/t/<token>` redirige con 302 a `/registro/<token>` y que aparece la
+fila en `email_clicks`.
+
+**B · Rellenar el formulario no cambia el estado del proveedor.**
+`form-submit.ts` inserta en `registration_submissions` y marca el envío, pero no
+toca `marketplace.providers`. El proveedor sigue en `candidate` después de
+haberse registrado él mismo, que es justo la señal más fuerte que puede dar.
+
+*Arreglo:* dentro de la misma transacción del envío, pasar el proveedor a
+`under_review` y anotar `reviewed_at`. Los estados válidos están en el `CHECK` de
+la tabla: `candidate`, `under_review`, `approved`, `rejected`, `archived`. Se
+recomienda **no** saltar a `approved` de forma automática: que una persona
+apruebe.
+
+**C · No hay envío real de campaña desde el panel.**
+Existe `sendEmailCampaign` en la librería, pero la pantalla de campañas no lo
+dispara. Hoy solo hay el envío de prueba.
+
+### 31.3 Orden de implementación
+
+Cada paso es verificable por separado. No pasar al siguiente sin comprobar el
+anterior.
+
+**Paso 1 — Enrutar el enlace por el contador.**
+Tocar `src/lib/campaigns.ts`, la línea de `customProperties.registration_url`.
+Verificación: crear una campaña de prueba y comprobar en la base que
+`email_clicks` recibe una fila al abrir `/t/<token>`.
+
+**Paso 2 — Confirmar al proveedor al recibir el formulario.**
+Tocar `src/pages/api/public/form-submit.ts`. El `UPDATE` de providers va junto al
+`UPDATE` de `campaign_sends`, en la misma transacción: si falla uno no debe
+quedar el otro. Añadir una entrada en `audit_log` con `action='provider.confirmed'`
+y `entity_type='provider'` — recordar que `entity_type` es **NOT NULL**, error que
+ya costó una depuración.
+Verificación: enviar el formulario con un token real y comprobar que el proveedor
+pasa a `under_review` y que la vista de proveedores lo refleja.
+
+**Paso 3 — Envío real desde el panel.**
+Encadenar en `campaigns.ts`: `upsertConsentedContact` para cada destinatario,
+`createTagSegment` + `waitForSegmentReady`, `importEmailTemplate`,
+`createEmailCampaignDraft` y `sendEmailCampaign`. Todo eso ya está escrito en
+`omnisend.ts`; falta la orquestación y el botón.
+**Este paso manda correo a personas reales. No ejecutarlo sin autorización
+explícita del responsable.**
+
+**Paso 4 — Cerrar el círculo en el panel.**
+La pantalla de campañas ya tiene el endpoint de estadísticas. Mostrar por campaña:
+enviados, clics registrados y formularios recibidos. Las dos primeras salen de
+`campaign_sends` y `email_clicks`; la tercera de `registration_submissions`.
+
+### 31.4 Cómo trabajar en esto
+
+**Entorno local con datos reales.** Ver la sección 14: abrir el túnel SSH y
+levantar `npm run dev`. Sin túnel la aplicación arranca en modo demostración.
+
+**Migraciones.** Ver la sección 15. Las tablas pertenecen a `postgres`, no al
+usuario de la aplicación, así que hay que entrar por SSH:
+
+```bash
+ssh -T -i ~/.ssh/marketplace-eventos ec2-user@54.167.34.107 \
+  "sudo -n -u postgres psql -d marketplace -v ON_ERROR_STOP=1 --single-transaction -f -" < migracion.sql
+```
+
+Este plan **no necesita migraciones**: todas las columnas implicadas
+—`token_expires_at`, `form_submitted_at`, `providers.status`, `reviewed_at`—
+ya existen.
+
+**Inspeccionar producción sin escribir.** Consultas de lectura por el túnel con
+el usuario de la aplicación, que tiene `SELECT`:
+
+```bash
+ssh -T -i ~/.ssh/marketplace-eventos ec2-user@54.167.34.107 \
+  "sudo -n -u postgres psql -d marketplace -At -c \"SELECT status, count(*) FROM marketplace.providers GROUP BY status\""
+```
+
+**Dejar el terreno limpio entre pruebas.** Configuración tiene el borrado de
+datos de operación; escribir `BORRAR TODO` para habilitarlo. El `audit_log` no se
+toca, y desde el arreglo de la blacklist eso ya no contamina los escaneos.
+
+**Delegar en subagentes.** Los pasos 1, 2 y 4 son independientes entre sí y se
+pueden repartir. Para trabajo de esta naturaleza conviene Codex `gpt-5.6-luna`
+con `model_reasoning_effort="xhigh"`, no el `medium` que usa la curaduría: aquí
+no se trata de buscar en la web sino de tocar transacciones de base de datos y
+flujos de correo, donde un descuido se paga caro. El paso 3 no se delega: manda
+correo real.
+
+**Verificar siempre contra la base, no contra la interfaz.** Varias veces en la
+sesión anterior la pantalla decía una cosa y la base otra. Un `SELECT` después de
+cada paso.
+
+### 31.5 Lo que hay que decidir antes de empezar
+
+1. **¿`under_review` o un estado nuevo?** El proveedor que se registra solo no es
+   lo mismo que uno que un operador puso a revisar. Si se quiere distinguir, hace
+   falta ampliar el `CHECK` de `providers.status`, y eso sí es una migración.
+2. **¿Qué pasa si el formulario llega de alguien sin proveedor asociado?**
+   `campaign_sends.provider_id` admite nulos. Hoy la ficha se guarda igual y no
+   hay a quién confirmar.
+3. **El envío QA sigue pendiente de autorización.** Cuatro buzones reales en
+   `QA_TEST_RECIPIENTS`.
+
+## 32. Commits hasta aquí
+
+```text
+a354bf7 feat: leer el sitio del proveedor para sacar correo e Instagram
+5d1e311 refactor: una sola tarjeta de búsqueda en vez de dos
+08b49fc refactor: una sola acción de búsqueda, sin exponer el mecanismo
+b06dbae refactor: el agente vuelve a ser quien busca; Places solo enriquece
+d1e8b1b feat: umbral de calificación y reseñas definido por el operador
+70c5b75 fix: el umbral no debe tirar la reputación repartida entre plataformas
+373620c feat: completar el lote con los negocios que el agente no alcanza
+8951696 fix: leer el correo antes de decidir el canal de contacto
+16902e2 feat: el correo gratuito entra cuando no hay corporativo ni móvil
+454d43a docs: seguimiento de la sesión del 20 y 21 de septiembre
+1d509b1 merge: cosecha desde Places, registro del proveedor y umbral configurable
+f269e45 feat: opción para borrar los datos de operación
+6e5c76b feat: vista de proveedores con filtros y secciones
+f5ce60e feat: no volver a buscar proveedores que ya están en la base
+0c9ba5a fix: dar señal al guardar un lote y refrescar la tabla al terminar
+1c43ae7 feat: filtros de ciudad y categoría, y tablas separadas por canal
+0f03f2b refactor: ciudad y categoría por encima del resto de filtros
+a8ef5c3 fix: la blacklist deja de arrastrar el historial entre corridas
+```
