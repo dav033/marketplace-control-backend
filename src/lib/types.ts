@@ -13,6 +13,15 @@ export type Provider = {
   discovery_source: string | null;
   contact_email: string | null;
   last_activity: string | null;
+  platform_count: number;
+  additional_categories: string[];
+};
+
+export type ProviderSource = {
+  source_name: string;
+  observed_rating: number | null;
+  observed_reviews: number | null;
+  source_url: string | null;
 };
 
 export type Registration = {

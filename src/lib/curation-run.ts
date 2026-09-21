@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { CURATION_HEADERS, parseCurationTsv, summarizeContactChannels, validateCurationBatch } from './curation';
-import { curateProviders, hasContactForDiscovery, type CurationLivePreview, type CurationPhaseReporter, type GeminiCurationResult } from './gemini';
+import { buildLivePreviewRows, curateProviders, hasContactForDiscovery, type CurationLivePreview, type CurationPhaseReporter, type GeminiCurationResult } from './gemini';
 import { saveCurationScan } from './curation-history';
 import { logCurationEvent } from './curation-log';
 
@@ -18,6 +18,7 @@ function buildPreview(merged: GeminiCurationResult): CurationLivePreview {
       line: row.line,
       issues: row.issues.map(item => ({ message: item.message })),
     })),
+    rows: buildLivePreviewRows(parseCurationTsv(merged.tsv)),
   };
 }
 
@@ -74,6 +75,9 @@ export async function runCurationGoal(input: {
   instructions?: string;
   targetCount: number;
   jobId?: string;
+  /** Umbral de reputación que pide el operador; por defecto, el estándar de curaduría. */
+  minRating?: number;
+  minReviews?: number;
   onPhase?: CurationPhaseReporter;
 }): Promise<GeminiCurationResult> {
   const targetCount = Math.max(1, Math.min(100, Math.trunc(input.targetCount)));
@@ -108,6 +112,8 @@ export async function runCurationGoal(input: {
         scanAttempt: attempt,
         jobId: input.jobId,
         runId,
+        minRating: input.minRating,
+        minReviews: input.minReviews,
         onPhase: (phase, detail, progress, preview) => input.onPhase?.(phase, `Escaneo ${attempt}: ${detail}`, progress, preview),
       });
     } catch (error) {

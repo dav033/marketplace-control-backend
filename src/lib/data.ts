@@ -1,6 +1,6 @@
 import { demoDashboard, demoProvider } from './demo';
 import { query, pool } from './db';
-import type { DashboardData, Provider, Registration } from './types';
+import type { DashboardData, Provider, ProviderSource, Registration } from './types';
 
 export async function getDashboard(): Promise<DashboardData> {
   if (!pool) return demoDashboard();
@@ -8,10 +8,11 @@ export async function getDashboard(): Promise<DashboardData> {
   try {
     const [providers, registrations, counts] = await Promise.all([
       query<Provider>(`
-        SELECT p.provider_id, p.display_name, p.category, p.city, p.rating, p.review_count, p.contact_channel,
+        SELECT p.provider_id, p.display_name, p.category, p.additional_categories, p.city, p.rating, p.review_count, p.contact_channel,
                p.status, p.discovery_source,
                c.email AS contact_email,
-               to_char(GREATEST(p.updated_at, COALESCE(rs.created_at, p.updated_at)), 'DD Mon, HH24:MI') AS last_activity
+               to_char(GREATEST(p.updated_at, COALESCE(rs.created_at, p.updated_at)), 'DD Mon, HH24:MI') AS last_activity,
+               COALESCE(src.platform_count, 0) AS platform_count
         FROM marketplace.providers p
         LEFT JOIN LATERAL (
           SELECT email FROM marketplace.contacts WHERE provider_id = p.provider_id ORDER BY created_at DESC LIMIT 1
@@ -19,6 +20,10 @@ export async function getDashboard(): Promise<DashboardData> {
         LEFT JOIN LATERAL (
           SELECT created_at FROM marketplace.registration_submissions WHERE provider_id = p.provider_id ORDER BY created_at DESC LIMIT 1
         ) rs ON true
+        LEFT JOIN LATERAL (
+          SELECT count(*)::int AS platform_count FROM marketplace.provider_sources
+          WHERE provider_id = p.provider_id AND observed_rating IS NOT NULL AND observed_reviews IS NOT NULL
+        ) src ON true
         ORDER BY p.updated_at DESC LIMIT 30
       `),
       query<Registration>(`
@@ -43,10 +48,17 @@ export async function getDashboard(): Promise<DashboardData> {
   }
 }
 
+/**
+ * `provider_id` es una columna uuid: un identificador con otra forma hace que PostgreSQL lance
+ * "invalid input syntax for type uuid" y la pagina devuelva 500 donde corresponde un 404.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export async function getProvider(id: string) {
   if (!pool || id.startsWith('demo-')) return demoProvider(id);
+  if (!UUID_PATTERN.test(id)) return null;
   const result = await query<Provider>(`
-    SELECT p.provider_id, p.display_name, p.category, p.city, p.rating, p.review_count, p.contact_channel,
+    SELECT p.provider_id, p.display_name, p.category, p.additional_categories, p.city, p.rating, p.review_count, p.contact_channel,
            p.status, p.discovery_source, c.email AS contact_email, NULL AS last_activity
     FROM marketplace.providers p
     LEFT JOIN LATERAL (
@@ -54,5 +66,15 @@ export async function getProvider(id: string) {
     ) c ON true
     WHERE p.provider_id = $1
   `, [id]);
-  return result.rows[0] ?? null;
+  const provider = result.rows[0] ?? null;
+  if (!provider) return null;
+  // Reputación por plataforma: cada fila de provider_sources con calificación y reseñas observadas
+  // es una plataforma distinta donde el negocio tiene reseñas públicas, no solo Google.
+  const sources = await query<ProviderSource>(`
+    SELECT source_name, observed_rating, observed_reviews, source_url
+    FROM marketplace.provider_sources
+    WHERE provider_id = $1 AND observed_rating IS NOT NULL AND observed_reviews IS NOT NULL
+    ORDER BY observed_reviews DESC NULLS LAST
+  `, [id]);
+  return { ...provider, sources: sources.rows };
 }

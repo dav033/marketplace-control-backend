@@ -59,6 +59,10 @@ export const POST: APIRoute = async ({ request }) => {
   const instructions = typeof payload.instructions === 'string' ? payload.instructions : undefined;
   const requestedTarget = typeof payload.targetCount === 'number' ? payload.targetCount : Number(payload.targetCount);
   const targetCount = Number.isFinite(requestedTarget) ? Math.max(1, Math.min(100, Math.trunc(requestedTarget))) : 20;
+  const rawRating = Number(payload.minRating);
+  const rawReviews = Number(payload.minReviews);
+  const minRating = Number.isFinite(rawRating) ? Math.min(5, Math.max(0, rawRating)) : 4.5;
+  const minReviews = Number.isFinite(rawReviews) ? Math.max(0, Math.min(100000, Math.trunc(rawReviews))) : 30;
   if (!city.trim() || !category.trim()) return json({ ok: false, error: 'Ciudad y categoría son obligatorias.' }, 400);
 
   const runningJob = getRunningCurationJob(city, category);
@@ -73,6 +77,8 @@ export const POST: APIRoute = async ({ request }) => {
         city: job.city,
         category: job.category,
         instructions,
+        minRating,
+        minReviews,
         targetCount,
         jobId: job.jobId,
         onPhase: (phase, detail, progress, preview) => updateCurationJob(job.jobId, phase, detail, progress, preview),

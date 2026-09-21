@@ -452,3 +452,333 @@ fab9330  fix: simplify Gemini structured curation schema
 ```
 
 El siguiente push a `main` vuelve a activar el workflow de despliegue.
+
+---
+
+## 14. Corrección del acceso local — 2026-09-20
+
+`deploy/dev-production.ps1` apuntaba a `~/.ssh/marketplace-aws`, una clave que no
+existe en la máquina. La real es `~/.ssh/marketplace-eventos`, como ya recogía
+`~/.ssh/config` bajo el alias `marketplace-eventos`. El script fallaba antes de
+abrir el túnel. Corregido.
+
+Falla conocida que sigue apareciendo: si SSH emite el aviso de *post-quantum key
+exchange*, PowerShell lo trata como error y aborta el script. Cuando pase, abrir
+el túnel a mano y arrancar el servidor por separado:
+
+```bash
+ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
+  -i ~/.ssh/marketplace-eventos -L 127.0.0.1:15432:127.0.0.1:5432 ec2-user@54.167.34.107
+```
+
+```bash
+npm run dev
+```
+
+Comprobar que el túnel está arriba:
+
+```bash
+netstat -ano | grep "127.0.0.1:15432.*LISTENING"
+```
+
+Sin túnel la aplicación arranca en modo demostración. Si la portada muestra
+«Modo demostración», el túnel está caído.
+
+## 15. Migraciones: el usuario de la aplicación no es dueño de las tablas
+
+Las tablas pertenecen a `postgres`; la aplicación entra como
+`marketplace_control`. Un `ALTER TABLE` por el túnel falla con *must be owner*.
+Las migraciones se aplican entrando al servidor:
+
+```bash
+ssh -T -i ~/.ssh/marketplace-eventos ec2-user@54.167.34.107 \
+  "sudo -n -u postgres psql -d marketplace -v ON_ERROR_STOP=1 --single-transaction -f -" < migracion.sql
+```
+
+Al añadir columnas conviene reconceder permisos, por si en su día se concedieron
+por columna y no por tabla:
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON marketplace.<tabla> TO marketplace_control;
+```
+
+## 16. Portales de reputación muertos — 2026-09-20
+
+De las ocho plataformas que el prompt declaraba verificables, **dos no existen**:
+
+| Dominio | Estado |
+|---|---|
+| `matrimonios.com.co` | Nunca existió. Era una errata en el prompt |
+| `matrimonio.com.co` | El nombre real, pero cerrado por The Knot Worldwide |
+| `zankyou.com.co` | Redirige al mismo aviso de cierre |
+| `bodas.com.co` | No resuelve. `bodas.co` es un dominio aparcado en venta |
+
+No queda ningún portal de bodas colombiano operativo con reseñas públicas. Se
+retiraron de las seis enumeraciones del prompt y de los allowlists del validador
+en `curation.ts` y `gemini.ts`: dejarlos permitía aceptar una calificación
+atribuida a un sitio inexistente, es decir, inventada.
+
+Quedan seis plataformas válidas: Google, TripAdvisor, Booking, Facebook, Rappi y
+DiDi.
+
+## 17. Reputación verificada contra Google Places — 2026-09-20
+
+El enriquecedor buscaba **solo por nombre comercial** e ignoraba el teléfono y la
+URL que las filas ya traían. Ahora busca en cascada por identidad decreciente:
+teléfono, dominio propio, nombre. Verificado contra la API: buscar por teléfono
+devuelve el negocio exacto sin ambigüedad.
+
+Se añadió tolerancia singular/plural y rótulos concatenados, del tipo
+`@banquetesmarlloly`. Prueba A/B sobre los mismos 34 fallos previos: recupera
+exactamente los dos falsos negativos reales, sin introducir falsos positivos.
+
+Cobertura de reputación en las diez categorías: de 16 a 24 de 50.
+
+## 18. El registro oficial completa el lote del agente — 2026-09-21
+
+Arquitectura decidida: **el agente busca; Google Places enriquece y completa**.
+
+Se probó la contraria —Places como fuente, agente como verificador— y se midió
+que era peor: al inyectarle la lista en el prompt, solo el **17 %** de lo que el
+agente devolvía procedía de ella. Descartaba el resto y volvía a descubrir por su
+cuenta, devolviendo por ejemplo un asador brasileño como proveedor de mantelería.
+No es un problema de redacción: se intentó en tres corridas distintas.
+
+El flujo quedó así:
+
+1. El agente investiga en fuentes públicas. Es su valor: alcanza negocios sin
+   ficha pública.
+2. Places rellena la calificación y las reseñas que el agente no pudo confirmar.
+   Google Maps no expone su calificación como texto rastreable, así que el agente
+   nunca la encuentra por búsqueda web.
+3. Places completa el lote hasta el objetivo con negocios que el agente no
+   alcanzó, deduplicando por nombre y por teléfono.
+4. Se lee el sitio de cada negocio añadido para sacar correo e Instagram.
+5. Se filtra por el umbral que pida el operador.
+
+Medición que motivó el paso 3: en Comida y Bebida de Barranquilla con umbral 4,5
+y 50 reseñas, el agente devolvía **8** proveedores y el registro conocía **24**
+que cumplían, todos contactables. El techo no era el umbral sino lo que el agente
+alcanza a descubrir.
+
+Una sola página por consulta a Places, a propósito: la segunda se rellena con
+coincidencias flojas, y de ahí salían centros comerciales en «Invitación digital»
+y un sex shop en «Menaje».
+
+## 19. Umbral configurable y reputación repartida — 2026-09-21
+
+El listón de 4,5 y 30 reseñas estaba incrustado en el prompt y en el validador.
+Ahora se pide en la búsqueda y viaja a dos sitios: al prompt, para que el agente
+no gaste escaneos en lo que va a caer; y al filtrado del lote, porque orientar al
+agente no garantiza el resultado.
+
+El filtro respeta la regla de reputación combinada: sin llegar al mínimo en
+ninguna plataforma por separado, dos o más que sí alcancen la calificación y
+sumen el doble de reseñas también califican. El mínimo combinado escala con el
+umbral. La primera versión del filtro miraba solo las columnas principales y
+descartaba esos proveedores; corregido.
+
+## 20. Correo e Instagram leídos del sitio — 2026-09-21
+
+El agente **no abre páginas**. Medido en dos corridas: `webFetchCalls: 0` en
+ambas, con cero correos encontrados. El correo no está en los resultados de
+búsqueda sino dentro del sitio, y a menudo en `/contacto`.
+
+Se añadió `src/lib/contact-scrape.ts`, que descarga la portada y, si hace falta,
+una página de contacto del mismo dominio. Tarda un segundo y no puede inventarse
+una dirección.
+
+Dos filtros salieron de mirar resultados reales:
+
+- El correo de la agencia que montó el sitio aparecía como si fuera del
+  proveedor: `cliente@gurusoluciones.com` salió en dos negocios sin relación
+  entre sí. Solo se acepta el del propio dominio o uno de correo gratuito.
+- La comparación de dominio se hace por su raíz: un negocio alojado en
+  `lastrinitarias.com.co` publica su correo en `@lastrinitarias.com` y son el
+  mismo. Compararlos literalmente descartaba un correo legítimo.
+
+También se descartan los nombres de fichero que cumplen el patrón de correo
+(`logo@2x.png`) y los recursos estáticos que parecían cuentas de Instagram
+(`instagram.com/rsrc.php`).
+
+## 21. Canal de contacto — 2026-09-21
+
+La cadena quedó explícita:
+
+1. **Correo corporativo** manda: se le escribe, tenga móvil o no.
+2. Sin corporativo, **WhatsApp**, que es el canal natural del proveedor pequeño.
+3. Ni corporativo ni móvil, el **correo gratuito** que publique.
+4. Sin nada, la validación lo rechaza por falta de contacto.
+
+El tercer caso estaba roto: un negocio con solo un gmail y un teléfono fijo se
+clasificaba como WhatsApp y la validación lo rechazaba después por no tener
+móvil. Quedaba inalcanzable teniendo un contacto usable.
+
+Reparto medido en Comida y Bebida con umbral 4,5 y 50: 16 aceptados, 1 por correo
+y 15 por WhatsApp. No es un fallo del sistema: de esos 20 proveedores, **11 no
+tienen sitio propio** — operan por Instagram y WhatsApp — y de los 9 que sí, solo
+1 publica correo.
+
+## 22. Fase 2: registro del proveedor — 2026-09-21
+
+Del clic en el correo al formulario. Evoluciona lo que ya existía en vez de abrir
+una vía paralela: reutiliza `registration_submissions` y el token de
+`campaign_sends`.
+
+Qué se le pregunta, además de lo que ya había: productos (lista abierta, hasta
+10), categorías en las que trabaja (hasta 5, de las 10 oficiales) y volumen de
+asistentes como rango.
+
+El rango se guarda como **dos enteros**, no como etiqueta, lo que permite derivar
+la Escala de curaduría sin pedirle al proveedor que entienda esa clasificación
+interna.
+
+El enlace **caduca**: `REGISTRATION_TOKEN_TTL_DAYS`, 30 días por defecto,
+rellenado al crear la campaña. Antes no lo ponía nadie y los enlaces repartidos
+eran eternos. Un valor nulo se considera vigente, para no invalidar los que ya
+están en buzones.
+
+El envío es **único**. Antes `ON CONFLICT DO UPDATE` dejaba reenviar y
+sobrescribir; ahora la segunda entrega recibe un 409.
+
+### Migración aplicada en producción el 2026-09-21
+
+Ejecutada como `postgres`, en una transacción. Datos intactos: 0 registros,
+8 envíos, 5 proveedores.
+
+```text
+campaign_sends.token_expires_at        timestamptz
+campaign_sends.form_submitted_at       timestamptz
+registration_submissions.products      text[]   CHECK cardinality <= 10
+registration_submissions.services      text[]   CHECK cardinality <= 5
+registration_submissions.volume_min    integer
+registration_submissions.volume_max    integer  CHECK volume_max >= volume_min
+```
+
+## 23. Errores corregidos — 2026-09-20/21
+
+| Dónde | Qué pasaba |
+|---|---|
+| `src/lib/data.ts` | `getProvider` pasaba el identificador sin validar a una columna `uuid`: cualquier id con otra forma daba **500** en vez de 404 |
+| `src/pages/api/public/form-submit.ts` | `formData()` quedaba fuera del `try`: un POST con `content-type: application/json` esquivaba el guard CSRF de Astro y reventaba con un TypeError sin manejar, en un **endpoint público** |
+| `deploy/dev-production.ps1` | Apuntaba a una clave SSH inexistente |
+
+## 24. Benchmarks: dos familias
+
+El agente se lleva el **97,6 %** del reloj: 14–19 invocaciones del CLI a unos
+103 s cada una. De ahí que haya benchmarks que lo invocan y otros que no.
+
+| Script | Invoca al agente | Coste |
+|---|---|---|
+| `scripts/bench-harvest.ts` | No | **13 s** |
+| `scripts/bench-harvest-tsv.ts` | No | **13 s** |
+| `scripts/bench-reduced.ts` | 8 veces | ~8 min |
+| `scripts/bench-all-categories.ts` | 14–19 veces | 25–35 min |
+
+Iterar con los de 13 segundos y confirmar con el completo solo cuando el cambio
+toque al agente. En esta sesión se gastó hora y media en tres corridas completas
+para descubrir cosas que el benchmark barato habría dicho en segundos.
+
+```bash
+node --env-file=.env --experimental-strip-types --import ./scripts/ts-resolver.mjs \
+  scripts/bench-harvest.ts "Barranquilla" salida.json
+```
+
+`CURATION_DISABLE_HARVEST=1` apaga el completado desde Places, para medir el
+brazo de control.
+
+## 25. Mapa del código nuevo
+
+| Fichero | Qué hace |
+|---|---|
+| `src/lib/google-places.ts` | Reputación de un negocio concreto: cascada teléfono → dominio → nombre |
+| `src/lib/places-harvest.ts` | Candidatos de una categoría en una ciudad |
+| `src/lib/harvest-import.ts` | Convierte un negocio en fila de curaduría de 20 columnas |
+| `src/lib/harvest-verify.ts` | Lee sitios y pide al agente que confirme el servicio |
+| `src/lib/contact-scrape.ts` | Extrae correo e Instagram del sitio del proveedor |
+| `src/pages/api/providers/harvest.ts` | Endpoint de consulta directa y preparación de lote |
+| `src/pages/registro/[token].astro` | Formulario del proveedor, con sus cuatro estados |
+
+`npm test` cubre 12 conjuntos. Los añadidos en esta sesión:
+
+- `scripts/google-places.test.ts` — emparejador, con 13 guardas anti-falso-positivo
+- `scripts/contact-scrape.test.ts` — filtros de correo; el caso `logo@2x.png`
+- `scripts/curation-threshold.test.ts` — umbral y reputación combinada
+- `scripts/curation-complete.test.ts` — completado y deduplicación
+- `scripts/contact-channel.test.ts` — cadena de canal de contacto
+- `scripts/registro-form.test.ts` — validaciones del formulario
+
+## 26. Decisiones de esta sesión
+
+- **El agente descubre, Places enriquece — no al revés.** Medido: la arquitectura
+  contraria daba 17 % de adherencia a la lista inyectada.
+- **Un juicio dudoso no borra un proveedor.** Cuando el agente marca que un
+  negocio no presta el servicio, la fila entra igualmente con el aviso escrito en
+  la justificación. Marcó como no aptos a dos fotógrafos reales con 5,0/35 y
+  4,9/64. Perder un proveedor bueno en silencio es peor que arrastrar uno dudoso:
+  el dudoso se ve, el perdido no.
+- **El correo lo lee el código, no el agente.** El agente no abre páginas.
+- **Precisión sobre cantidad en los correos.** Bajó de 4 a 2, pero los 2 son
+  correctos y de los 4 dos eran de la agencia que montó el sitio.
+- **El mecanismo no se expone en la interfaz.** Un botón para buscar, uno para
+  preparar el lote. El operador no tiene por qué saber de dónde sale cada dato.
+- **Los secretos no entran al repositorio.** Este documento describe el
+  procedimiento y los nombres de las variables; los valores viven en el `.env`
+  local y en `/etc/marketplace-control/marketplace-control.env`.
+
+## 27. Qué queda pendiente
+
+### Decisiones del negocio
+
+1. **Envío QA de correo.** `POST /api/campaigns/qa-test` dispara un test-email a
+   cuatro buzones reales (`QA_TEST_RECIPIENTS`). Nunca se ejecutó: hace falta
+   autorización explícita. Sus guardas sí están probadas.
+2. **Días de caducidad del enlace.** 30 es una suposición.
+3. **Texto legal del consentimiento** en el formulario de registro.
+4. **Categorías que no encajan.** Si un proveedor hace algo fuera de las 10
+   oficiales, hoy no tiene dónde ponerlo.
+
+### Trabajo técnico
+
+1. **El agente juzga mal la pertinencia.** Marcó como no aptos a dos fotógrafos
+   reales. Ya no borra nada, pero su juicio no es fiable y conviene medirlo.
+2. **Tasa de correos baja: 2 de 15 sitios.** Queda por medir si las categorías
+   empresariales — Lugar, Servicios Especializados — rinden mejor que Comida y
+   Bebida.
+3. **Pertinencia imperfecta en el completado.** Un sex shop con 4,9 y 1 794
+   reseñas entra como proveedor de mantelería. Ningún filtro automático lo
+   resuelve; por eso existe la revisión humana antes de importar.
+4. **Salones en tres categorías.** El mismo negocio sale en Lugar,
+   Entretenimiento y Decoración.
+5. **Historial de pruebas en producción.** Las corridas de benchmark dejaron
+   registros de escaneo en `audit_log` mezclados con tráfico real. No se importó
+   ningún proveedor.
+
+## 28. Cifras de referencia — Barranquilla, 2026-09-20/21
+
+| | |
+|---|---|
+| Búsqueda del agente, 10 categorías | 25–35 min, 7 aceptados |
+| Consulta directa a Places, 10 categorías | 13 s, 485 candidatos, 82 filas válidas |
+| Comida y Bebida con umbral 4,5 y 50 | El agente traía 8; Places conocía 24 que cumplían |
+| Cobertura de reputación tras la cascada | 16 → 24 de 50 |
+| Correos encontrados leyendo sitios | 2 de 15, ambos correctos |
+| Reparto de canal en Comida y Bebida | 1 correo, 15 WhatsApp |
+| Proveedores sin sitio propio | 11 de 20 |
+
+## 29. Commits de la sesión
+
+```text
+67de0c2 feat: cosechar proveedores desde Google Places
+3611c5f feat: el proveedor declara su oferta al abrir el enlace del correo
+ea7f5a3 feat: reputación multiplataforma, canal de contacto y métricas de campaña
+a354bf7 feat: leer el sitio del proveedor para sacar correo e Instagram
+5d1e311 refactor: una sola tarjeta de búsqueda en vez de dos
+08b49fc refactor: una sola acción de búsqueda, sin exponer el mecanismo
+b06dbae refactor: el agente vuelve a ser quien busca; Places solo enriquece
+d1e8b1b feat: umbral de calificación y reseñas definido por el operador
+70c5b75 fix: el umbral no debe tirar la reputación repartida entre plataformas
+373620c feat: completar el lote con los negocios que el agente no alcanza
+8951696 fix: leer el correo antes de decidir el canal de contacto
+16902e2 feat: el correo gratuito entra cuando no hay corporativo ni móvil
+```

@@ -18,7 +18,9 @@ function renderQaBody(bodyText: string, origin: string) {
     .replaceAll('{{enlace_registro}}', qaRegistrationUrl)
     .replaceAll('{{registro_url}}', qaRegistrationUrl);
   return {
-    html: `<div style="white-space:pre-line;font-family:Arial,sans-serif;font-size:16px;line-height:1.55;color:#202124">${escapeHtml(text)}</div><p><a href="${qaRegistrationUrl}">Abrir enlace de prueba</a></p><hr><p style="font-size:12px;color:#666"><a href="[[unsubscribe_link]]">Cancelar suscripción</a> · <a href="[[preference_link]]">Preferencias</a></p>`,
+    // [[unsubscribe_link]]/[[preference_link]] son merge tags de Omnisend: solo se resuelven en un
+    // envío real a una audiencia, no en test-email. Aquí llegarían literales, así que se omiten.
+    html: `<div style="white-space:pre-line;font-family:Arial,sans-serif;font-size:16px;line-height:1.55;color:#202124">${escapeHtml(text)}</div><p><a href="${qaRegistrationUrl}">Abrir enlace de prueba</a></p><hr><p style="font-size:12px;color:#666">Correo de prueba QA — no es un envío real a un contacto suscrito.</p>`,
   };
 }
 
@@ -33,7 +35,7 @@ export const POST: APIRoute = async ({ request }) => {
     const subject = String(payload.subject ?? '').trim();
     const bodyText = String(payload.body_text ?? '').trim();
     if (!name || !subject || !bodyText) throw new Error('CAMPAIGN_FIELDS_REQUIRED');
-    const senderEmail = requiredEmail(String(payload.sender_email ?? env('SES_FROM_EMAIL') ?? ''), 'SES_FROM_EMAIL');
+    const senderEmail = requiredEmail(String(payload.sender_email ?? env('OMNISEND_SENDER_EMAIL') ?? ''), 'OMNISEND_SENDER_EMAIL');
     const template = await importEmailTemplate({ name: `QA · ${name}`.slice(0, 250), html: `<html><body>${renderQaBody(bodyText, new URL(request.url).origin).html}</body></html>` });
     const templateId = typeof template.id === 'string' ? template.id : typeof template.templateID === 'string' ? template.templateID : '';
     if (!templateId) throw new Error('OMNISEND_TEMPLATE_ID_MISSING');
@@ -50,7 +52,7 @@ export const POST: APIRoute = async ({ request }) => {
     return new Response(JSON.stringify({ ok: true, recipients: QA_TEST_RECIPIENTS, campaignId }), { status: 201, headers: { 'content-type': 'application/json' } });
   } catch (error) {
     const code = error instanceof Error ? error.message : 'QA_TEST_FAILED';
-    const status = ['CONFIRMATION_REQUIRED', 'CAMPAIGN_FIELDS_REQUIRED', 'SES_FROM_EMAIL_INVALID', 'OMNISEND_TEST_RECIPIENTS_INVALID'].includes(code) ? 400 : code === 'OMNISEND_NOT_CONFIGURED' ? 503 : 500;
+    const status = ['CONFIRMATION_REQUIRED', 'CAMPAIGN_FIELDS_REQUIRED', 'OMNISEND_SENDER_EMAIL_INVALID', 'OMNISEND_TEST_RECIPIENTS_INVALID'].includes(code) ? 400 : code === 'OMNISEND_NOT_CONFIGURED' ? 503 : 500;
     return new Response(JSON.stringify({ ok: false, error: code }), { status, headers: { 'content-type': 'application/json' } });
   }
 };

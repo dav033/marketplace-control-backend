@@ -44,11 +44,17 @@ export type CurationBlacklistEntry = {
 };
 
 /**
- * Motivos de rechazo que NO describen al negocio, sino un fallo del propio agente: fue descubierto
- * bien y se perdió porque la verificación se cayó. Bloquearlo para siempre vacía el mercado, así que
- * solo se respeta dentro de la misma ejecución, para no repetir trabajo en el escaneo siguiente.
+ * Motivos de rechazo que NO describen al negocio, sino un fallo del propio agente o de su
+ * herramienta de búsqueda: fue descubierto bien y se perdió por un límite de la investigación, no
+ * porque el negocio no califique. `pending_reputation_review` y `missing_review_disclosure` entran
+ * aquí porque Google Maps no expone su calificación como texto rastreable por búsqueda web general
+ * (confirmado: ni una búsqueda web genérica ni un fetch directo a Google Maps la muestran, aunque la
+ * calificación exista y sea visible para una persona en el navegador) — un negocio real puede quedar
+ * marcado "Sin dato" solo por esa limitación de la herramienta, en un escaneo y no en otro. Bloquearlo
+ * para siempre vacía el mercado, así que solo se respeta dentro de la misma ejecución, para no repetir
+ * trabajo en el escaneo siguiente.
  */
-const RETRYABLE_REASON_CODES = new Set(['not_returned_by_verification']);
+const RETRYABLE_REASON_CODES = new Set(['not_returned_by_verification', 'pending_reputation_review', 'missing_review_disclosure']);
 
 export function isReleasedForRetry(
   entry: Pick<CurationBlacklistEntry, 'status' | 'reasonCodes' | 'runId'>,
