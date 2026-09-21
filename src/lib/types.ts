@@ -9,6 +9,7 @@ export type Provider = {
   rating: number | null;
   review_count: number | null;
   contact_channel: ContactChannel;
+  phone: string | null;
   status: ProviderStatus;
   discovery_source: string | null;
   contact_email: string | null;
