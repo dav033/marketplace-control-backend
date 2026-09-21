@@ -17,36 +17,32 @@ En esta sesión el panel está corriendo en `http://127.0.0.1:4321/` conectado a
 
 ## Separación frontend / backend
 
-El repositorio contiene dos aplicaciones:
-
-| | Dónde vive | Qué sirve | Despliegue |
-|---|---|---|---|
-| **Backend** | raíz del repo | solo `/api/**` y `/t/:token` | EC2, por el workflow de siempre |
-| **Frontend** | `frontend/` | todas las páginas del panel | Vercel |
-
-El frontend no tiene acceso a PostgreSQL ni a ninguna credencial de servicio externa: todo lo pide
-por HTTP a `/api/v1/*` del backend, autenticándose con `BACKEND_SERVICE_TOKEN`.
+Este repositorio es solo el backend: sirve `/api/**` y `/t/:token`, y no contiene ninguna página
+(`.astro`). El panel completo vive en un repositorio aparte,
+[`marketplace-control-frontend`](https://github.com/dav033/marketplace-control-frontend),
+desplegado en Vercel. Se comunican por HTTP: el frontend pide a `/api/v1/*` de este backend
+autenticándose con `BACKEND_SERVICE_TOKEN`, y este backend no sirve ni conoce ninguna página del
+panel.
 
 ```bash
-npm run dev                  # backend  -> http://127.0.0.1:4321 (solo API)
-npm run dev --prefix frontend  # panel  -> http://127.0.0.1:4322
+npm run dev   # backend -> http://127.0.0.1:4321 (solo API)
 ```
 
-El `frontend/.env` necesita `BACKEND_URL` y `BACKEND_SERVICE_TOKEN`. Sin `BACKEND_URL`, el proxy
-responde 503 diciéndolo en vez de fallar en silencio.
+Para levantar el panel en local, clona el repo del frontend aparte y sigue su propio README.
 
-### Por qué hay un proxy en el frontend
+### Por qué el frontend tiene un proxy
 
-Los scripts de las páginas llaman a rutas del mismo origen (`/api/ai/curation`, `/api/campaigns`…).
-Con el panel en Vercel esas rutas no existen ahí, así que `frontend/src/pages/api/[...path].ts`
-reenvía cualquier `/api/*` al backend **añadiendo el token del lado del servidor**. Las alternativas
-—llamar al backend desde el navegador o reescribir cada `fetch`— obligan a CORS y dejan el token de
-servicio a la vista en el JavaScript de la página.
+Los scripts de las páginas del panel llaman a rutas del mismo origen (`/api/ai/curation`,
+`/api/campaigns`…). Con el panel en Vercel esas rutas no existen ahí, así que el repo del frontend
+tiene un proxy (`src/pages/api/[...path].ts`) que reenvía cualquier `/api/*` a este backend
+**añadiendo el token del lado del servidor**. Las alternativas —llamar al backend desde el navegador
+o reescribir cada `fetch`— obligan a CORS y dejan el token de servicio a la vista en el JavaScript de
+la página.
 
-### Al separar los dominios
+### Dominios
 
-`FRONTEND_URL` en el backend es obligatorio: `/t/:token` registra el clic del correo y redirige al
-formulario, que ya no se sirve desde el backend. Sin esa variable, el proveedor acaba en un 404.
+`FRONTEND_URL` en este backend es obligatorio: `/t/:token` registra el clic del correo y redirige al
+formulario del panel, que ya no se sirve desde aquí. Sin esa variable, el proveedor acaba en un 404.
 
 ## PostgreSQL
 
