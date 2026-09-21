@@ -891,11 +891,16 @@ Verificación: crear una campaña de prueba y comprobar en la base que
 `email_clicks` recibe una fila al abrir `/t/<token>`.
 
 **Paso 2 — Confirmar al proveedor al recibir el formulario.**
-Tocar `src/pages/api/public/form-submit.ts`. El `UPDATE` de providers va junto al
-`UPDATE` de `campaign_sends`, en la misma transacción: si falla uno no debe
-quedar el otro. Añadir una entrada en `audit_log` con `action='provider.confirmed'`
-y `entity_type='provider'` — recordar que `entity_type` es **NOT NULL**, error que
-ya costó una depuración.
+Primero la migración del `CHECK` de estados (ver 31.6), porque sin ella el
+`UPDATE` falla. Después tocar `src/pages/api/public/form-submit.ts`: el `UPDATE`
+que lleva el proveedor a `unconfirmed` va junto al `UPDATE` de `campaign_sends`,
+en la misma transacción; si falla uno no debe quedar el otro. Añadir una entrada
+en `audit_log` con `action='provider.confirmed'` y `entity_type='provider'` —
+recordar que `entity_type` es **NOT NULL**, error que ya costó una depuración.
+
+Repasar también lo que asume la lista de estados: `ProviderStatus` en
+`src/lib/types.ts`, `StatusBadge`, el filtro de estado de la vista y
+`src/lib/demo.ts`.
 Verificación: enviar el formulario con un token real y comprobar que el proveedor
 pasa a `under_review` y que la vista de proveedores lo refleja.
 
@@ -904,8 +909,10 @@ Encadenar en `campaigns.ts`: `upsertConsentedContact` para cada destinatario,
 `createTagSegment` + `waitForSegmentReady`, `importEmailTemplate`,
 `createEmailCampaignDraft` y `sendEmailCampaign`. Todo eso ya está escrito en
 `omnisend.ts`; falta la orquestación y el botón.
-**Este paso manda correo a personas reales. No ejecutarlo sin autorización
-explícita del responsable.**
+Mientras `QA_TEST_RECIPIENTS` apunte al buzón de prueba, este paso se puede
+ejercitar sin riesgo: el correo sale de verdad pero llega a una dirección propia.
+**Antes de apuntarlo a proveedores reales hace falta autorización explícita del
+responsable**, y salir del sandbox de SES.
 
 **Paso 4 — Cerrar el círculo en el panel.**
 La pantalla de campañas ya tiene el endpoint de estadísticas. Mostrar por campaña:
@@ -925,9 +932,10 @@ ssh -T -i ~/.ssh/marketplace-eventos ec2-user@54.167.34.107 \
   "sudo -n -u postgres psql -d marketplace -v ON_ERROR_STOP=1 --single-transaction -f -" < migracion.sql
 ```
 
-Este plan **no necesita migraciones**: todas las columnas implicadas
-—`token_expires_at`, `form_submitted_at`, `providers.status`, `reviewed_at`—
-ya existen.
+Las columnas implicadas —`token_expires_at`, `form_submitted_at`,
+`providers.status`, `reviewed_at`— ya existen. La única migración del plan es
+**ampliar el `CHECK` de `providers.status`** para admitir el estado nuevo; va
+antes del paso 2 y está escrita en 31.6.
 
 **Inspeccionar producción sin escribir.** Consultas de lectura por el túnel con
 el usuario de la aplicación, que tiene `SELECT`:
@@ -945,23 +953,108 @@ toca, y desde el arreglo de la blacklist eso ya no contamina los escaneos.
 pueden repartir. Para trabajo de esta naturaleza conviene Codex `gpt-5.6-luna`
 con `model_reasoning_effort="xhigh"`, no el `medium` que usa la curaduría: aquí
 no se trata de buscar en la web sino de tocar transacciones de base de datos y
-flujos de correo, donde un descuido se paga caro. El paso 3 no se delega: manda
-correo real.
+flujos de correo, donde un descuido se paga caro. El paso 3 se puede delegar **en modo prueba**, con el buzón
+propio como destinatario y comprobando la variable antes de cada corrida; el
+envío a proveedores reales no.
 
 **Verificar siempre contra la base, no contra la interfaz.** Varias veces en la
 sesión anterior la pantalla decía una cosa y la base otra. Un `SELECT` después de
 cada paso.
 
-### 31.5 Lo que hay que decidir antes de empezar
+### 31.5 Probar la cadena de extremo a extremo, con correo de verdad
 
-1. **¿`under_review` o un estado nuevo?** El proveedor que se registra solo no es
-   lo mismo que uno que un operador puso a revisar. Si se quiere distinguir, hace
-   falta ampliar el `CHECK` de `providers.status`, y eso sí es una migración.
-2. **¿Qué pasa si el formulario llega de alguien sin proveedor asociado?**
-   `campaign_sends.provider_id` admite nulos. Hoy la ficha se guarda igual y no
-   hay a quién confirmar.
-3. **El envío QA sigue pendiente de autorización.** Cuatro buzones reales en
-   `QA_TEST_RECIPIENTS`.
+**No se manda nada a clientes reales.** Todo el correo de prueba cae en un buzón
+propio: `QA_TEST_RECIPIENTS` en el `.env` está puesto a
+`david.theran03@gmail.com`, y esa variable tiene prioridad sobre cualquier otra.
+Eso convierte la cadena entera en algo comprobable de verdad, no solo en teoría.
+
+**Comprobar antes de cada prueba** que la variable sigue apuntando solo ahí:
+
+```bash
+grep -E "^QA_TEST_RECIPIENTS=" .env
+```
+
+Si alguna vez aparecen varias direcciones separadas por coma, el envío va a
+todas. El fichero de ejemplo del servidor trae tres de `@sempertex.com`; el
+`.env` local las sobrescribe con la de prueba, y conviene que siga así mientras
+se desarrolla.
+
+**El recorrido completo, en el navegador:**
+
+1. **Disparar el envío.** `POST /api/campaigns/qa-test` con `confirm: true`,
+   nombre, asunto y cuerpo. Crea plantilla y campaña en Omnisend y manda el
+   correo de prueba.
+2. **Abrir el buzón** de `david.theran03@gmail.com` en una pestaña y esperar a
+   que llegue. Es correo real saliendo por Omnisend, con su latencia.
+3. **Pulsar el enlace del correo.** Aquí se comprueba el hueco A: si el enlace
+   lleva a `/registro/<token>` no se cuenta el clic; si lleva a `/t/<token>`
+   debe redirigir con 302 al formulario **y** dejar una fila en `email_clicks`.
+4. **Rellenar y enviar el formulario.** Productos, categorías y volumen.
+5. **Verificar en la base**, que es donde está la verdad:
+
+```sql
+SELECT cs.form_submitted_at, p.status, p.reviewed_at
+  FROM marketplace.campaign_sends cs
+  LEFT JOIN marketplace.providers p ON p.provider_id = cs.provider_id
+ WHERE cs.tracking_token_hash = <hash del token>;
+
+SELECT count(*) FROM marketplace.email_clicks;
+SELECT products, services, volume_min, volume_max
+  FROM marketplace.registration_submissions ORDER BY created_at DESC LIMIT 1;
+```
+
+6. **Reabrir el enlace.** Debe mostrar «Ya tenemos tu información» y el endpoint
+   responder 409. El envío es único.
+
+**Cada paso falla de forma distinta y conviene aislarlo:** si no llega el correo
+el problema es Omnisend; si llega pero no cuenta el clic es el hueco A; si el
+formulario guarda pero el proveedor sigue en `candidate` es el hueco B.
+
+**Estado de la cuenta de correo.** SES sigue en sandbox según la sección 7, así
+que solo se puede enviar a direcciones verificadas —`david.theran03@gmail.com`
+lo está—. El envío de campaña a proveedores reales necesita salir del sandbox
+primero, y eso es un trámite aparte.
+
+**Limpiar entre pruebas** con el borrado de Configuración, escribiendo
+`BORRAR TODO`. Borra envíos, clics y formularios, así que cada recorrido empieza
+limpio.
+
+### 31.6 Decisiones ya tomadas
+
+**Estado nuevo para el proveedor que se registra solo.** No se reutiliza
+`under_review`: la progresión es `candidate` → estado nuevo cuando el proveedor
+rellena el formulario. El nombre acordado es **`unconfirmed`** («unconfirmed
+provider»).
+
+Esto **sí necesita migración**, porque `providers.status` tiene un `CHECK` con la
+lista cerrada de valores. Va antes del paso 2:
+
+```sql
+ALTER TABLE marketplace.providers DROP CONSTRAINT IF EXISTS providers_status_check;
+ALTER TABLE marketplace.providers
+  ADD CONSTRAINT providers_status_check
+  CHECK (status IN ('candidate','unconfirmed','under_review','approved','rejected','archived'));
+```
+
+Se aplica por SSH como `postgres`, según la sección 15. Después hay que repasar
+todo lo que asume la lista de estados: el tipo `ProviderStatus` en
+`src/lib/types.ts`, el componente `StatusBadge`, el filtro de estado de la vista
+de proveedores y los datos de demostración en `src/lib/demo.ts`.
+
+*Observación sobre el nombre:* `unconfirmed` se lee como «sin confirmar», y el
+proveedor que llega a ese estado es justamente el que **sí** confirmó sus datos;
+lo que falta es que un operador lo apruebe. Si en algún momento resulta
+confuso al leer la pantalla, el cambio es una migración más. Se deja el nombre
+acordado.
+
+**Un envío sin proveedor asociado no puede darse.** Aunque
+`campaign_sends.provider_id` admita nulos en el esquema, por diseño todo envío
+sale de un proveedor. El código no necesita una rama para ese caso; basta con
+registrar el hecho si alguna vez ocurre, porque significaría que algo se corrompió
+aguas arriba.
+
+**El envío QA está aprobado** con `david.theran03@gmail.com` como destinatario,
+que es lo que ya trae el `.env`. Ver la sección 31.5.
 
 ## 32. Commits hasta aquí
 
