@@ -1529,6 +1529,7 @@ PUNTO DE PARTIDA VERIFICADO — ${usable.length} negocios de "${category}" en ${
 ${listado}
 
 Trabaja sobre esta lista primero. Tu tarea con ellos NO es descubrirlos sino verificarlos: confirma en una fuente viva que el negocio realmente presta el servicio de "${category}" para eventos (un rótulo de Google puede ser genérico), y completa lo que la API no da — correo electrónico e Instagram. Descarta el que no preste el servicio y dilo en la justificación. Cuando la lista no alcance el objetivo, o no cubra bien la categoría, complétala con investigación web propia como harías normalmente.
+Que la API de Places no traiga "web" en la lista de arriba NO significa que el negocio no tenga sitio ni correo: solo significa que tienes que buscarlo tú, con una búsqueda dedicada (ej. "${'{nombre del negocio}'}" ${city} sitio web, o "${'{nombre del negocio}'}" contacto). "La API no entrega este dato" nunca es una justificación válida por sí sola para dejar el correo en "Sin dato" — solo lo es después de haber buscado el sitio propio del negocio y no haberlo encontrado, o de haberlo revisado y no tener correo publicado. Dilo así en la justificación si ese es el caso.
 `;
       }
     } catch (error) {
