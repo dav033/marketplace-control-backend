@@ -12,7 +12,10 @@ function requiredEmail(value: string, label: string) {
 }
 
 function renderQaBody(bodyText: string, origin: string) {
-  const qaRegistrationUrl = `${(env('APP_URL') || origin).replace(/\/$/, '')}/registro/qa-prueba`;
+  // `/registro/*` lo sirve el frontend desde la separación, no este backend: a diferencia de
+  // `/t/:token` (que campaigns.ts sí arma con APP_URL porque esa ruta sigue siendo del backend),
+  // este enlace tiene que resolver contra FRONTEND_URL o el correo de prueba apunta a un 404.
+  const qaRegistrationUrl = `${(env('FRONTEND_URL') || env('APP_URL') || origin).replace(/\/$/, '')}/registro/qa-prueba`;
   const text = bodyText
     .replaceAll('{{nombre}}', 'David')
     .replaceAll('{{enlace_registro}}', qaRegistrationUrl)
