@@ -43,7 +43,8 @@ export type SkipReason = 'ALREADY_ANNOUNCED' | 'ALREADY_REGISTERED' | 'REJECTED'
 type CandidateRow = {
   provider_id: string; display_name: string; city: string; category: string | null;
   additional_categories: string[] | null; phone: string | null; contact_channel: 'email' | 'whatsapp';
-  status: string; whatsapp_status: string | null; email: string | null; email_consented: boolean;
+  status: string; whatsapp_status: string | null; rating: string | null; review_count: number | null;
+  email: string | null; email_consented: boolean;
   full_name: string | null; announced: boolean;
 };
 
@@ -112,8 +113,14 @@ export async function setCityStatus(cityId: string, status: CityStatus): Promise
   return (await listCities()).find((city) => city.city_id === cityId) ?? null;
 }
 
+/**
+ * Filtros del anuncio: se puede abrir una ciudad entera o anunciar solo a una categoría y a los que
+ * lleguen a cierta reputación, para no gastar el cupo de WhatsApp con quien no interesa todavía.
+ */
+export type AnnouncementFilters = { category?: string; minRating?: number; minReviews?: number };
+
 /** A quién le tocaría el anuncio y por qué canal, sin enviar nada. */
-export async function announcementPlan(cityId: string): Promise<AnnouncementPlan | null> {
+export async function announcementPlan(cityId: string, filters: AnnouncementFilters = {}): Promise<AnnouncementPlan | null> {
   if (!pool) return null;
   const city = await query<{ city_id: string; name: string; status: CityStatus }>(
     `SELECT city_id, name, status FROM marketplace.cities WHERE city_id = $1`,
@@ -123,7 +130,7 @@ export async function announcementPlan(cityId: string): Promise<AnnouncementPlan
 
   const rows = await query<CandidateRow>(`
     SELECT p.provider_id, p.display_name, p.city, p.category, p.additional_categories, p.phone, p.contact_channel,
-           p.status, p.whatsapp_status,
+           p.status, p.whatsapp_status, p.rating, p.review_count,
            c.email, c.full_name,
            COALESCE(c.consent_status = 'granted' AND c.suppressed_at IS NULL, false) AS email_consented,
            EXISTS (SELECT 1 FROM marketplace.city_announcements ca WHERE ca.city_id = $1 AND ca.provider_id = p.provider_id) AS announced
@@ -133,8 +140,13 @@ export async function announcementPlan(cityId: string): Promise<AnnouncementPlan
       WHERE provider_id = p.provider_id ORDER BY created_at DESC LIMIT 1
     ) c ON true
     WHERE lower(trim(p.city)) = lower($2)
+      -- La categoría cuenta también si es una de las adicionales: un salón que además hace catering
+      -- entra en los dos anuncios.
+      AND ($3::text IS NULL OR p.category = $3 OR $3 = ANY(p.additional_categories))
+      AND ($4::numeric IS NULL OR p.rating >= $4)
+      AND ($5::int IS NULL OR p.review_count >= $5)
     ORDER BY p.display_name
-  `, [cityId, city.rows[0].name]);
+  `, [cityId, city.rows[0].name, filters.category ?? null, filters.minRating ?? null, filters.minReviews ?? null]);
 
   const targets: AnnouncementTarget[] = [];
   const skipped: AnnouncementPlan['skipped'] = [];
@@ -185,8 +197,11 @@ export type AnnouncementResult = {
  * Envía el anuncio de apertura. Cada envío se registra antes de seguir con el siguiente, para que un
  * fallo a mitad no haga que alguien reciba el anuncio dos veces en el próximo intento.
  */
-export async function announceCity(cityId: string, options: { testNumber?: string } = {}): Promise<AnnouncementResult | 'NOT_FOUND' | 'CITY_CLOSED'> {
-  const plan = await announcementPlan(cityId);
+export async function announceCity(
+  cityId: string,
+  options: { testNumber?: string } & AnnouncementFilters = {},
+): Promise<AnnouncementResult | 'NOT_FOUND' | 'CITY_CLOSED'> {
+  const plan = await announcementPlan(cityId, options);
   if (!plan) return 'NOT_FOUND';
   if (plan.city.status !== 'abierta') return 'CITY_CLOSED';
 

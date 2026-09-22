@@ -47,7 +47,19 @@ function jobPayload(job: ReturnType<typeof getCurationJob>) {
 
 export const GET: APIRoute = async ({ url }) => {
   const jobId = url.searchParams.get('job_id');
-  if (!jobId) return json({ ok: false, error: 'Falta job_id.' }, 400);
+
+  // Sin job_id se puede preguntar por ciudad y categoría. Es la red de seguridad del panel: si la
+  // respuesta del POST se pierde por el camino, recupera el trabajo que ya está corriendo en vez de
+  // quedarse sin nada que consultar.
+  if (!jobId) {
+    const city = url.searchParams.get('city')?.trim();
+    const category = url.searchParams.get('category')?.trim();
+    if (city && category) {
+      const running = getRunningCurationJob(city, category);
+      return running ? json(jobPayload(running)) : json({ ok: false, error: 'No hay ninguna búsqueda en curso.' }, 404);
+    }
+    return json({ ok: false, error: 'Falta job_id.' }, 400);
+  }
   const job = getCurationJob(jobId);
   if (!job) return json({ ok: false, error: 'La búsqueda ya no está disponible.' }, 404);
   return json(jobPayload(job));

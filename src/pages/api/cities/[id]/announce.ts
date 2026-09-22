@@ -16,8 +16,21 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 }
 
-export const GET: APIRoute = async ({ params }) => {
-  const plan = await announcementPlan(params.id ?? '');
+/** Los filtros llegan por query en la vista previa y en el cuerpo al enviar. */
+function readFilters(get: (name: string) => string | null | undefined) {
+  const category = get('category')?.trim() || undefined;
+  const rating = Number(get('minRating'));
+  const reviews = Number(get('minReviews'));
+  return {
+    category,
+    minRating: Number.isFinite(rating) && rating > 0 ? Math.min(5, rating) : undefined,
+    minReviews: Number.isFinite(reviews) && reviews > 0 ? Math.trunc(reviews) : undefined,
+  };
+}
+
+export const GET: APIRoute = async ({ params, url }) => {
+  const filtros = readFilters((name) => url.searchParams.get(name));
+  const plan = await announcementPlan(params.id ?? '', filtros);
   if (!plan) return json({ ok: false, error: 'NOT_FOUND' }, 404);
 
   const motivos = new Map<string, number>();
@@ -40,11 +53,12 @@ export const GET: APIRoute = async ({ params }) => {
     cupoDisponible: Math.max(0, limite - await countOutreachToday()),
     redirigidoA: redirectTarget(),
     numerosPrueba: testNumbers(),
+    filtros,
   });
 };
 
 export const POST: APIRoute = async ({ request, params }) => {
-  let payload: { confirm?: unknown; testNumber?: unknown };
+  let payload: { confirm?: unknown; testNumber?: unknown; category?: unknown; minRating?: unknown; minReviews?: unknown };
   try {
     payload = await request.json() as typeof payload;
   } catch {
@@ -61,7 +75,11 @@ export const POST: APIRoute = async ({ request, params }) => {
     if (!normalizeTestNumber(testNumber)) return json({ ok: false, error: 'INVALID_TEST_NUMBER' }, 400);
   }
 
-  const result = await announceCity(params.id ?? '', { testNumber });
+  const filtros = readFilters((name) => {
+    const value = (payload as Record<string, unknown>)[name];
+    return value === undefined || value === null ? null : String(value);
+  });
+  const result = await announceCity(params.id ?? '', { testNumber, ...filtros });
   if (result === 'NOT_FOUND') return json({ ok: false, error: 'NOT_FOUND' }, 404);
   if (result === 'CITY_CLOSED') return json({ ok: false, error: 'CITY_CLOSED' }, 409);
   return json({ ok: true, ...result }, 201);
