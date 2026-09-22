@@ -18,7 +18,9 @@ assert.equal(parseSimulationTrigger('hola'), null);
 
 // --- Quién puede simular ---
 delete process.env.WHATSAPP_SIMULATION_NUMBERS;
-assert.equal(simulationAllowed('573001112233'), false, 'sin configurar, nadie');
+assert.equal(simulationAllowed('573001112233'), true, 'sin configurar, cualquiera');
+process.env.WHATSAPP_SIMULATION_NUMBERS = 'off';
+assert.equal(simulationAllowed('573001112233'), false, '"off" la desactiva');
 process.env.WHATSAPP_SIMULATION_NUMBERS = '+57 300 111 2233, 573004445566';
 assert.equal(simulationAllowed('573001112233'), true, 'el número se compara solo por dígitos');
 assert.equal(simulationAllowed('573004445566'), true);

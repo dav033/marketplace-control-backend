@@ -96,9 +96,10 @@ proveedor: la misma invitación que recibe el proveedor real y la conversación 
 ficha precargada. Desde ahí, quien prueba contesta en el papel del proveedor. Cada nuevo `id: ...`
 reinicia la conversación, así que se pueden probar varios proveedores desde un mismo teléfono.
 
-Solo funciona desde los números de `WHATSAPP_SIMULATION_NUMBERS` (separados por comas; `*` para
-cualquiera). La ficha que resulte se guarda con `consent_source = 'whatsapp-simulacion'` y no cambia
-el estado del proveedor real; decir "no me interesa" en una simulación no bloquea el número.
+Funciona desde cualquier número. Para restringirlo, `WHATSAPP_SIMULATION_NUMBERS` con la lista de
+números separados por comas; `off` lo desactiva. La ficha que resulte se guarda con
+`consent_source = 'whatsapp-simulacion'` y no cambia el estado del proveedor real; decir "no me
+interesa" en una simulación no bloquea el número.
 
 ## Envío de campañas (Omnisend)
 

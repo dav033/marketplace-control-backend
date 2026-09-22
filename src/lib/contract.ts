@@ -24,7 +24,8 @@ export const HAPPIA_WHATSAPP_NUMBER = '573107346405';
  * Quien prueba lo envía desde su propio WhatsApp al número de Happia, y el backend responde como si
  * el sistema le hubiera escrito primero a ese proveedor: le manda la invitación de contacto saliente
  * y, desde ahí, quien prueba contesta en el papel del proveedor y el agente conversa con toda la
- * ficha del negocio delante. Solo funciona desde los números de `WHATSAPP_SIMULATION_NUMBERS`.
+ * ficha del negocio delante. Funciona desde cualquier número salvo que el backend lo restrinja
+ * con `WHATSAPP_SIMULATION_NUMBERS`.
  */
 export function buildSimulationTrigger(providerId: string): string {
   return `id: ${providerId}`;

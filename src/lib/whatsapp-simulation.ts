@@ -15,9 +15,10 @@ const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? 
  * mismo estado de conversación, con la ficha del negocio precargada. A partir de ahí, quien prueba
  * contesta en el papel del proveedor.
  *
- * Solo desde los números de `WHATSAPP_SIMULATION_NUMBERS`: sin esa lista, cualquiera que conociera
- * un id podría hacerse pasar por un proveedor. Y lo que sale de una simulación queda marcado como
- * tal: la ficha se guarda para poder revisarla, pero no cambia el estado del proveedor real.
+ * Cualquier número puede simular, salvo que `WHATSAPP_SIMULATION_NUMBERS` lo restrinja a una lista
+ * (o `off` lo desactive). Es seguro dejarlo abierto porque lo que sale de una simulación queda
+ * marcado como tal: la ficha se guarda para poder revisarla, pero no cambia el estado del proveedor
+ * real, y la invitación solo le llega a quien la pidió.
  */
 
 /** Dígitos del número, que es como llega `wa_id` desde Meta. */
@@ -25,11 +26,11 @@ function digits(value: string) {
   return value.replace(/\D/g, '');
 }
 
-/** `*` habilita a cualquiera; solo tiene sentido en una cuenta de pruebas. */
+/** Sin configurar (o `*`), cualquiera; con una lista, solo esos números; `off`, nadie. */
 export function simulationAllowed(waId: string): boolean {
   const configured = (env('WHATSAPP_SIMULATION_NUMBERS') ?? '').trim();
-  if (!configured) return false;
-  if (configured === '*') return true;
+  if (!configured || configured === '*') return true;
+  if (/^(off|no|false|0)$/i.test(configured)) return false;
   const allowed = configured.split(',').map(digits).filter(Boolean);
   return allowed.includes(digits(waId));
 }
