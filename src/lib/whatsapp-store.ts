@@ -209,6 +209,26 @@ export async function startConversation(waId: string, seed: SeedProvider, state:
   );
 }
 
+/**
+ * El estado de la última conversación de un proveedor, aunque fuera con otro teléfono.
+ *
+ * Sirve para no volver a empezar de cero cuando le escribimos otra vez: quien ya dio su ficha sigue
+ * teniéndola, y el agente tiene que saberlo antes de contestarle.
+ */
+export async function latestStateForProvider(providerId: string): Promise<ConversationState | null> {
+  if (!pool) {
+    for (const conversation of fallback().conversations.values()) {
+      if (conversation.providerId === providerId) return conversation.state;
+    }
+    return null;
+  }
+  const result = await query<{ state: ConversationState }>(
+    `SELECT state FROM marketplace.whatsapp_conversations WHERE provider_id = $1 ORDER BY updated_at DESC LIMIT 1`,
+    [providerId],
+  );
+  return result.rows[0]?.state ?? null;
+}
+
 /** Conversaciones abiertas que llevan tiempo sin avanzar; candidatas a un recordatorio. */
 export async function getStaleConversations(hours = 20): Promise<StoredConversation[]> {
   if (!pool) return [];

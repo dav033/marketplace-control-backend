@@ -1,11 +1,11 @@
 import { pool, query } from './db';
 import { REGISTER_URL } from './registration-fields';
 import { fillTemplate, getTemplateInfo, isWhatsappConfigured, resolveTestTarget, sendTemplate } from './whatsapp';
-import { countOutreachToday, isSuppressed, recordOutboundMessage, startConversation } from './whatsapp-store';
+import { countOutreachToday, isSuppressed, latestStateForProvider, recordOutboundMessage, startConversation } from './whatsapp-store';
 import { dailyLimit, toWhatsappNumber } from './whatsapp-outreach';
 import { stateFromProvider } from './conversation-runner';
 import { setProviderWhatsappStatus } from './data';
-import { applyStatusEvents } from './conversation-status';
+import { applyStatusEvents, type WhatsappStatus } from './conversation-status';
 import { createTagSegment, createEmailCampaignDraft, importEmailTemplate, isOmnisendConfigured, sendEmailCampaign, upsertConsentedContact, waitForSegmentReady } from './omnisend';
 import type { SeedProvider } from './registration-chat';
 
@@ -77,7 +77,7 @@ type CandidateRow = {
   full_name: string | null; announced: boolean;
 };
 
-export type AnnouncementTarget = { providerId: string; displayName: string; channel: 'whatsapp' | 'email'; phone?: string; email?: string; firstName?: string | null };
+export type AnnouncementTarget = { providerId: string; displayName: string; channel: 'whatsapp' | 'email'; phone?: string; email?: string; firstName?: string | null; whatsappStatus?: string | null };
 
 export type AnnouncementPlan = {
   city: { city_id: string; name: string; status: CityStatus };
@@ -183,7 +183,7 @@ export async function announcementPlan(cityId: string, filters: AnnouncementFilt
   const targets: AnnouncementTarget[] = [];
   const skipped: AnnouncementPlan['skipped'] = [];
   for (const row of rows.rows) {
-    const base = { providerId: row.provider_id, displayName: row.display_name.trim() };
+    const base = { providerId: row.provider_id, displayName: row.display_name.trim(), whatsappStatus: row.whatsapp_status };
     const descartado = announcementDecision(row, audience);
     if (descartado) { skipped.push({ ...base, reason: descartado }); continue; }
 
@@ -272,9 +272,15 @@ export async function announceCity(
     // con quién habla y qué se le dijo.
     const seed: SeedProvider = { providerId: target.providerId, displayName: target.displayName, city: plan.city.name, category: null, phone: target.phone };
     const waId = redirect ?? target.phone!;
-    const status = applyStatusEvents({ status: null, reason: null }, [{ type: 'sent' }]);
+    // Desde su estado de ahora, no desde cero: el anuncio le llega a gente con la que ya hablamos, y
+    // marcarlos a todos como "mensaje enviado" borraba que ya habían aceptado o dado su ficha.
+    const status = applyStatusEvents({ status: (target.whatsappStatus ?? null) as WhatsappStatus | null, reason: null }, [{ type: 'sent' }]);
+    const previo = await latestStateForProvider(target.providerId).catch(() => null);
     await startConversation(waId, seed, {
       ...stateFromProvider(seed, transcript),
+      // Y si ya tenía ficha guardada, se conserva: si contesta al anuncio, el agente hace seguimiento
+      // en vez de pedirle otra vez todo lo que ya contó.
+      ...(previo?.submissionId ? { submissionId: previo.submissionId, consent: previo.consent, draft: previo.draft } : {}),
       whatsapp: status,
       ...(redirect ? { testRedirect: { realPhone: target.phone! } } : {}),
     });

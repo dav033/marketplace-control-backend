@@ -470,7 +470,9 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'marketplace_control') THEN
     GRANT SELECT, INSERT, UPDATE ON marketplace.registration_submissions TO marketplace_control;
     GRANT SELECT, INSERT, UPDATE ON marketplace.cities TO marketplace_control;
-    GRANT SELECT, INSERT ON marketplace.city_announcements TO marketplace_control;
+    -- UPDATE porque el registro del anuncio es un upsert (un reintento pisa el fallo anterior);
+    -- sin él la fila no se escribía y el mismo proveedor podía recibir el anuncio dos veces.
+    GRANT SELECT, INSERT, UPDATE ON marketplace.city_announcements TO marketplace_control;
     GRANT SELECT, INSERT ON marketplace.audit_log TO marketplace_control;
   END IF;
 END;
