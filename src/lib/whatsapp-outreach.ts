@@ -91,10 +91,10 @@ export async function startOutreach(seed: SeedProvider): Promise<OutreachResult>
     return { ok: false, reason: 'SEND_FAILED' };
   }
 
-  // La conversación queda preparada con los datos del candidato: cuando el proveedor conteste, el
-  // bot sigue desde la confirmación de identidad sin volver a preguntarle lo que ya sabemos.
+  // La conversación queda preparada con los datos del candidato y con lo que le dijimos: cuando
+  // conteste, el agente sabe a quién le escribió y qué le propuso.
   const transcript = outreachTranscript(seed);
-  await saveOutreach(to, seed, stateFromProvider(seed));
+  await saveOutreach(to, seed, stateFromProvider(seed, transcript));
   await recordOutboundMessage(to, transcript);
 
   return { ok: true, to, templateName };

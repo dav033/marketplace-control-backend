@@ -95,6 +95,8 @@ export async function saveInbound(waId: string, profileName: string | null, time
      VALUES ($1, $2, $3, to_timestamp($4 / 1000.0), $5::jsonb, $6)
      ON CONFLICT (wa_id) DO UPDATE SET
        last_inbound_at = EXCLUDED.last_inbound_at,
+       -- Una simulación reinicia la conversación con otro proveedor: la fila tiene que seguirla.
+       provider_id = COALESCE(EXCLUDED.provider_id, marketplace.whatsapp_conversations.provider_id),
        profile_name = COALESCE(EXCLUDED.profile_name, marketplace.whatsapp_conversations.profile_name),
        state = EXCLUDED.state,
        finished = EXCLUDED.finished,

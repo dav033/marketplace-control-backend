@@ -13,27 +13,28 @@ export const SERVICE_TOKEN_HEADER = 'x-service-token';
 
 /**
  * Número de WhatsApp de Happia (sin "+", como lo pide wa.me), para abrir una conversación de
- * prueba hacia el negocio desde el panel — no es un secreto, es el mismo número público que
+ * prueba desde el panel — no es un secreto, es el mismo número público que
  * cualquiera puede encontrar en el perfil de WhatsApp Business.
  */
 export const HAPPIA_WHATSAPP_NUMBER = '573107346405';
 
 /**
- * Marca que el botón "Probar WhatsApp" del panel mete en el primer mensaje para que el bot sepa de
- * qué proveedor se trata sin adivinarlo del texto libre. Antes ese texto ("Hola, quiero registrar
- * {nombre}") se colaba entero como respuesta a la primera pregunta del formulario si traía una coma
- * — el saludo no lo reconocía como apertura y quedaba guardado como razón social. El frontend arma
- * el enlace `wa.me` con esta marca, el backend la lee del primer mensaje entrante ANTES de tratarlo
- * como respuesta del proveedor. No es un secreto: solo une un mensaje de WhatsApp con un proveedor.
+ * Mensaje con el que el botón "Simular WhatsApp" del panel arranca una simulación.
+ *
+ * Quien prueba lo envía desde su propio WhatsApp al número de Happia, y el backend responde como si
+ * el sistema le hubiera escrito primero a ese proveedor: le manda la invitación de contacto saliente
+ * y, desde ahí, quien prueba contesta en el papel del proveedor y el agente conversa con toda la
+ * ficha del negocio delante. Solo funciona desde los números de `WHATSAPP_SIMULATION_NUMBERS`.
  */
-export function buildTestRefTag(providerId: string): string {
-  return `[ref:${providerId}]`;
+export function buildSimulationTrigger(providerId: string): string {
+  return `id: ${providerId}`;
 }
 
-const TEST_REF_TAG = /\[ref:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/i;
+const SIMULATION_TRIGGER = /^\s*id\s*:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![0-9a-f-])/i;
 
-export function extractTestRefTag(text: string): string | null {
-  return TEST_REF_TAG.exec(text)?.[1] ?? null;
+/** El id del proveedor si el mensaje es un disparador de simulación; si no, null. */
+export function parseSimulationTrigger(text: string): string | null {
+  return SIMULATION_TRIGGER.exec(text)?.[1]?.toLowerCase() ?? null;
 }
 
 // Las categorías que puede marcar el proveedor son las mismas 10 de la curaduría: si aquí

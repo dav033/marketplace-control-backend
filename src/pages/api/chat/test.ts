@@ -4,7 +4,7 @@ import { getContactableCandidates } from '../../../lib/data';
 import type { SeedProvider } from '../../../lib/registration-chat';
 
 /**
- * Chat de prueba local: el mismo bot de WhatsApp, sin Meta de por medio.
+ * Chat de prueba local: el mismo agente de WhatsApp, sin Meta de por medio.
  *
  * Solo existe en desarrollo. Es un camino que escribe fichas reales en la base saltándose el token
  * del correo, así que en producción sería una puerta abierta para crear registros sin control.
@@ -60,12 +60,14 @@ export const POST: APIRoute = async ({ request }) => {
   if (!sessionId) return json({ ok: false, error: 'SESSION_REQUIRED' }, 400);
 
   if (payload.reset) {
-    // Reiniciar con un candidato arranca la conversación ya sabiendo a quién se escribe.
-    const seeded = payload.provider ? stateFromProvider(payload.provider) : emptyState();
+    // Reiniciar con un candidato simula que le escribimos primero: el agente conoce su ficha y sabe
+    // qué le dijo la plantilla. Sin candidato, simula a alguien que nos escribe por su cuenta.
+    const opening = greeting(payload.provider);
+    const seeded = payload.provider ? stateFromProvider(payload.provider, opening) : emptyState();
     registry().set(sessionId, seeded);
     return json({
       ok: true,
-      reply: greeting(payload.provider),
+      reply: opening,
       outcome: 'opening',
       draft: seeded.draft,
       finished: false,

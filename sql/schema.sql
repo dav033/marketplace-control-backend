@@ -157,7 +157,9 @@ CREATE TABLE IF NOT EXISTS marketplace.registration_submissions (
   submission_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   provider_id uuid REFERENCES marketplace.providers(provider_id) ON DELETE SET NULL,
   full_name text,
-  email text NOT NULL CHECK (email = lower(email)),
+  -- Opcional: una ficha que nace de una conversación de WhatsApp puede no traer correo; el número ya es
+  -- el canal de contacto y una persona del equipo completa el resto.
+  email text CHECK (email = lower(email)),
   phone text,
   company_name text,
   submission_status text NOT NULL DEFAULT 'new' CHECK (submission_status IN ('new','reviewing','approved','rejected','spam','converted')),
@@ -284,6 +286,7 @@ ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS latitude numeric(9,6)
 ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS longitude numeric(9,6);
 ALTER TABLE marketplace.registration_submissions ADD COLUMN IF NOT EXISTS consent_ip inet;
 ALTER TABLE marketplace.campaigns ADD COLUMN IF NOT EXISTS body_text text NOT NULL DEFAULT '';
+ALTER TABLE marketplace.registration_submissions ALTER COLUMN email DROP NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_contacts_email ON marketplace.contacts (lower(email));
 CREATE INDEX IF NOT EXISTS ix_providers_status_city_category ON marketplace.providers (status, city, category);
@@ -320,6 +323,17 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_registration_updated_at' AND tgrelid = 'marketplace.registration_submissions'::regclass) THEN
     CREATE TRIGGER trg_registration_updated_at BEFORE UPDATE ON marketplace.registration_submissions FOR EACH ROW EXECUTE FUNCTION marketplace.touch_updated_at();
+  END IF;
+END;
+$$;
+
+-- El agente de WhatsApp actualiza la ficha que ya guardó cuando el proveedor cambia algo después, y
+-- deja el antes y el después en audit_log. Solo si el rol de la aplicación existe en esta instalación.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'marketplace_control') THEN
+    GRANT SELECT, INSERT, UPDATE ON marketplace.registration_submissions TO marketplace_control;
+    GRANT SELECT, INSERT ON marketplace.audit_log TO marketplace_control;
   END IF;
 END;
 $$;

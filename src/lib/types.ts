@@ -30,7 +30,8 @@ export type Registration = {
   provider_id: string | null;
   company_name: string | null;
   full_name: string | null;
-  email: string;
+  /** Puede faltar en fichas que llegan por WhatsApp: el número ya es el canal de contacto. */
+  email: string | null;
   submission_status: string;
   created_at: string;
 };

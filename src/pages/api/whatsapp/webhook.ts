@@ -1,11 +1,11 @@
 import type { APIRoute } from 'astro';
 import { extractInboundMessages, isWhatsappConfigured, markAsRead, resolveWebhookChallenge, sendText, verifySignature } from '../../../lib/whatsapp';
 import { getConversation, isDuplicate, isSuppressed, recordOutboundMessage, saveInbound, saveState, suppress } from '../../../lib/whatsapp-store';
-import { emptyState, runTurn, stateFromProvider } from '../../../lib/conversation-runner';
-import { isOptOut, nextStep, type SeedProvider } from '../../../lib/registration-chat';
+import { emptyState, runTurn } from '../../../lib/conversation-runner';
+import { isOptOut } from '../../../lib/registration-chat';
 import { SERVICE_WINDOW_MS } from '../../../lib/whatsapp-session';
-import { extractTestRefTag } from '../../../lib/contract';
-import { getProvider } from '../../../lib/data';
+import { parseSimulationTrigger } from '../../../lib/contract';
+import { startSimulation } from '../../../lib/whatsapp-simulation';
 
 /**
  * Webhook de WhatsApp Cloud API.
@@ -52,102 +52,140 @@ export const POST: APIRoute = async ({ request }) => {
   return new Response('EVENT_RECEIVED', { status: 200 });
 };
 
-async function handleMessages(messages: ReturnType<typeof extractInboundMessages>) {
+/**
+ * Los mensajes de un mismo número se atienden de uno en uno.
+ *
+ * Quien escribe por WhatsApp suele mandar dos o tres mensajes seguidos, y cada uno llega en su
+ * propia llamada al webhook. En paralelo, los dos turnos leían el mismo estado y el segundo en
+ * guardar borraba lo que había anotado el primero. Una cola por número en el proceso basta: la app
+ * corre en un solo proceso.
+ */
+const queues = new Map<string, Promise<void>>();
+
+function serialize(key: string, task: () => Promise<void>): Promise<void> {
+  const current = (queues.get(key) ?? Promise.resolve()).then(task, task);
+  queues.set(key, current);
+  const cleanup = () => { if (queues.get(key) === current) queues.delete(key); };
+  current.then(cleanup, cleanup);
+  return current;
+}
+
+type InboundMessage = ReturnType<typeof extractInboundMessages>[number];
+
+async function handleMessages(messages: InboundMessage[]) {
   for (const message of messages) {
-    try {
-      // El control de duplicados va contra la base: Meta reintenta justo cuando algo falla, que es
-      // cuando el registro en memoria se habría perdido al reiniciar.
-      if (await isDuplicate(message.messageId, message.from, message.text)) continue;
+    await serialize(message.from, () => handleMessage(message));
+  }
+}
 
-      // Una baja se atiende antes que nada: ni se procesa el registro ni se le vuelve a escribir.
-      if (isOptOut(message.text)) {
-        await suppress(message.from, message.text.slice(0, 200), 'whatsapp-inbound');
-        console.error('whatsapp: baja solicitada', { waId: message.from });
-        if (isWhatsappConfigured()) {
-          const despedida = 'Listo, no te volvemos a escribir. Gracias por tu tiempo.';
-          await sendText(message.from, despedida).catch(() => {});
-          await recordOutboundMessage(message.from, despedida);
-        }
-        continue;
+async function handleMessage(message: InboundMessage) {
+  try {
+    // El control de duplicados va contra la base: Meta reintenta justo cuando algo falla, que es
+    // cuando el registro en memoria se habría perdido al reiniciar.
+    if (await isDuplicate(message.messageId, message.from, message.text)) return;
+
+    // Una baja se atiende antes que nada y sin modelo de por medio: ni se procesa el registro ni se
+    // le vuelve a escribir.
+    if (isOptOut(message.text)) {
+      await suppress(message.from, message.text.slice(0, 200), 'whatsapp-inbound');
+      console.error('whatsapp: baja solicitada', { waId: message.from });
+      if (isWhatsappConfigured()) {
+        const despedida = 'Listo, no te volvemos a escribir. Gracias por tu tiempo.';
+        await sendText(message.from, despedida).catch(() => {});
+        await recordOutboundMessage(message.from, despedida);
       }
+      return;
+    }
 
-      const almacenada = await getConversation(message.from);
-      let estadoPrevio = almacenada?.state ?? emptyState();
+    // Simulación desde el panel: `id: <proveedor>` no es un mensaje del proveedor, es la orden de
+    // arrancar una prueba en la que el sistema le escribe primero a ese proveedor.
+    const simulatedProvider = parseSimulationTrigger(message.text);
+    if (simulatedProvider) {
+      await handleSimulation(message, simulatedProvider);
+      return;
+    }
 
-      // El botón "Probar WhatsApp" del panel manda el id del proveedor en el primer mensaje: si la
-      // conversación es nueva y trae esa marca, se arranca ya sabiendo de qué candidato se trata —
-      // igual que cuando escribimos nosotros primero (`stateFromProvider`) — en vez de tratar el
-      // texto del enlace ("Hola, quiero registrar Atalú...") como si fuera la respuesta del
-      // proveedor al nombre de su empresa. Solo se mira en conversaciones nuevas: una vez fijado el
-      // candidato, un reenvío del mismo enlace no debe reiniciar lo ya avanzado.
-      let refProvider: SeedProvider | null = null;
-      if (!almacenada) {
-        const refId = extractTestRefTag(message.text);
-        const provider = refId ? await getProvider(refId) : null;
-        if (provider) {
-          refProvider = {
-            providerId: provider.provider_id,
-            displayName: provider.display_name,
-            city: provider.city,
-            category: provider.category,
-            additionalCategories: provider.additional_categories ?? [],
-            phone: provider.phone,
-            email: provider.contact_email,
-          };
-          estadoPrevio = stateFromProvider(refProvider);
-        }
-      }
+    const almacenada = await getConversation(message.from);
+    const estadoPrevio = almacenada?.state ?? emptyState();
 
-      // Guardar el entrante ANTES de contestar: abre la ventana de 24h y deja constancia aunque la
-      // respuesta falle. Si se guardara después, un fallo del modelo perdería el mensaje del
-      // proveedor y su avance.
-      await saveInbound(message.from, message.profileName, message.timestampMs, estadoPrevio);
+    // Guardar el entrante ANTES de contestar: abre la ventana de 24h y deja constancia aunque la
+    // respuesta falle. Si se guardara después, un fallo del modelo perdería el mensaje del
+    // proveedor y su avance.
+    await saveInbound(message.from, message.profileName, message.timestampMs, estadoPrevio);
 
-      if (!isWhatsappConfigured()) {
-        console.error('whatsapp inbound guardado sin responder: faltan credenciales');
-        continue;
-      }
+    if (!isWhatsappConfigured()) {
+      console.error('whatsapp inbound guardado sin responder: faltan credenciales');
+      return;
+    }
 
-      // El mensaje acaba de entrar, así que la ventana está abierta salvo que Meta reenvíe algo muy
-      // viejo. Se comprueba igual: fuera de la ventana un texto libre lo rechaza la API y hay que
-      // resolverlo con plantilla, que es una decisión de negocio y no se toma sola aquí.
-      if (Date.now() - message.timestampMs >= SERVICE_WINDOW_MS) {
-        console.error('whatsapp: mensaje fuera de la ventana de 24h; hace falta una plantilla', { waId: message.from });
-        continue;
-      }
+    // El mensaje acaba de entrar, así que la ventana está abierta salvo que Meta reenvíe algo muy
+    // viejo. Se comprueba igual: fuera de la ventana un texto libre lo rechaza la API y hay que
+    // resolverlo con plantilla, que es una decisión de negocio y no se toma sola aquí.
+    if (Date.now() - message.timestampMs >= SERVICE_WINDOW_MS) {
+      console.error('whatsapp: mensaje fuera de la ventana de 24h; hace falta una plantilla', { waId: message.from });
+      return;
+    }
 
-      await markAsRead(message.messageId).catch(() => {});
+    await markAsRead(message.messageId).catch(() => {});
 
-      // El mensaje que trajo la marca de proveedor no es una respuesta del candidato: es el gatillo
-      // que arranca la conversación ya identificada. Se contesta con la pregunta de confirmación de
-      // identidad directamente, sin pasarlo por `runTurn` — que lo leería como un "no entendí" y
-      // repreguntaría el nombre de la empresa, que ya se conoce.
-      if (refProvider) {
-        const pendiente = nextStep(estadoPrevio.draft);
-        const reply = pendiente ? pendiente.question(estadoPrevio.draft) : 'Ya tengo tus datos, ¿seguimos?';
-        await sendText(message.from, reply);
-        await recordOutboundMessage(message.from, reply);
-        continue;
-      }
+    // El mismo motor que usa el chat de prueba local.
+    const turn = await runTurn(estadoPrevio, message.text, {
+      channel: 'whatsapp',
+      handle: message.from,
+      profileName: message.profileName,
+    });
+    await saveState(message.from, turn.state);
 
-      // El mismo motor que usa el chat de prueba local: el bot rellena el formulario de registro.
-      const turn = await runTurn(estadoPrevio, message.text, { channel: 'whatsapp', handle: message.from });
-      await saveState(message.from, turn.state);
+    // Si la conversación se cierra porque no le interesa, no se le vuelve a escribir por iniciativa
+    // nuestra. Si él vuelve a escribir, el agente lo atiende. En una simulación, quien dijo que no es
+    // alguien del equipo probando: su número no se bloquea.
+    if (turn.outcome === 'declined' && !turn.state.simulation) {
+      await suppress(message.from, 'rechazó el registro en la conversación', 'whatsapp-declined');
+    }
 
-      // Si la conversación se cierra porque no le interesa, no se le vuelve a escribir.
-      if (turn.outcome === 'declined') {
-        await suppress(message.from, 'rechazó el registro en la conversación', 'whatsapp-declined');
-      }
-
-      await sendText(message.from, turn.reply);
-      await recordOutboundMessage(message.from, turn.reply);
-    } catch (error) {
-      // El detalle crudo se queda en el log del servidor. Al proveedor no se le cuenta qué falló ni
-      // con qué tecnología: solo que hubo un problema y que habrá una persona.
-      console.error('whatsapp reply failed', message.from, error instanceof Error ? error.message : error);
-      if (isWhatsappConfigured() && !(await isSuppressed(message.from))) {
-        await sendText(message.from, 'Tuvimos un problema para responderte en este momento. Un miembro del equipo te escribe enseguida.').catch(() => {});
-      }
+    await sendText(message.from, turn.reply);
+    await recordOutboundMessage(message.from, turn.reply);
+  } catch (error) {
+    // El detalle crudo se queda en el log del servidor. Al proveedor no se le cuenta qué falló ni
+    // con qué tecnología: solo que hubo un problema y que habrá una persona.
+    console.error('whatsapp reply failed', message.from, error instanceof Error ? error.message : error);
+    if (isWhatsappConfigured() && !(await isSuppressed(message.from))) {
+      await sendText(message.from, 'Tuvimos un problema para responderte en este momento. Un miembro del equipo te escribe enseguida.').catch(() => {});
     }
   }
+}
+
+/**
+ * Arranca una simulación: el sistema responde como si le hubiera escrito primero al proveedor.
+ *
+ * La conversación de este número se reinicia con ese proveedor, aunque viniera de otra prueba, y
+ * recibe la misma invitación que recibiría el proveedor real. Lo que conteste quien prueba lo
+ * atiende el agente con la ficha del negocio delante. Ver `whatsapp-simulation.ts`.
+ */
+async function handleSimulation(message: InboundMessage, providerId: string) {
+  const start = await startSimulation(message.from, providerId);
+
+  if (!start.ok) {
+    console.error('whatsapp: simulación rechazada', { waId: message.from, providerId, reason: start.reason });
+    if (!isWhatsappConfigured()) return;
+    const aviso = start.reason === 'NOT_ALLOWED'
+      ? 'Este número no está habilitado para simular conversaciones.'
+      : 'No encontré ese proveedor. Vuelve a lanzar la simulación desde el panel.';
+    await sendText(message.from, aviso).catch(() => {});
+    await recordOutboundMessage(message.from, aviso);
+    return;
+  }
+
+  // El entrante abre la ventana de 24h, así que la invitación puede salir como texto libre: aquí no
+  // hace falta la plantilla de Meta que exige el contacto real.
+  await saveInbound(message.from, message.profileName, message.timestampMs, start.state);
+  console.error('whatsapp: simulación iniciada', { waId: message.from, providerId: start.seed.providerId });
+
+  if (!isWhatsappConfigured()) return;
+  if (Date.now() - message.timestampMs >= SERVICE_WINDOW_MS) return;
+
+  await markAsRead(message.messageId).catch(() => {});
+  await sendText(message.from, start.opening);
+  await saveState(message.from, start.state);
+  await recordOutboundMessage(message.from, start.opening);
 }

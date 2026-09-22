@@ -23,22 +23,31 @@ export type IntakeResult =
   | { ok: true; submissionId: string; providerPromoted: boolean }
   | { ok: false; reason: 'DATABASE_NOT_CONFIGURED' | 'INCOMPLETE_DRAFT' | 'ALREADY_SUBMITTED' | 'WRITE_FAILED' };
 
+/**
+ * Lo mínimo para guardar una ficha que nace de una conversación libre: saber de qué negocio se
+ * trata y tener su autorización. El resto (correo, productos, asistentes) lo completa una persona
+ * del equipo si el proveedor no lo contó; el número de WhatsApp ya es un canal de contacto.
+ */
 function isComplete(draft: RegistrationDraft): boolean {
-  return Boolean(
-    draft.company_name && draft.full_name && draft.email
-    && draft.services?.length && draft.products?.length
-    && draft.volume_min !== undefined && draft.volume_max !== undefined
-    && draft.privacy_consent === true,
-  );
+  return Boolean(draft.company_name && draft.privacy_consent === true);
 }
 
-export async function saveConversationalRegistration(draft: RegistrationDraft, source: { channel: 'whatsapp' | 'chat-prueba'; handle: string; providerId?: string }): Promise<IntakeResult> {
+export async function saveConversationalRegistration(
+  draft: RegistrationDraft,
+  source: { channel: 'whatsapp' | 'chat-prueba'; handle: string; providerId?: string; simulationId?: string },
+): Promise<IntakeResult> {
   if (!pool) return { ok: false, reason: 'DATABASE_NOT_CONFIGURED' };
   if (!isComplete(draft)) return { ok: false, reason: 'INCOMPLETE_DRAFT' };
 
-  // `idempotency_key` es UNIQUE: si el mismo número reenvía la misma ficha (por un reintento del
-  // webhook o porque repite la conversación), la segunda no duplica nada.
-  const idempotencyKey = `${source.channel}:${source.handle}:${draft.email}`;
+  // `idempotency_key` es UNIQUE: una ficha por número y candidato. Si el mismo número vuelve a
+  // autorizar (un reintento del webhook, o la conversación repetida), la segunda no duplica nada.
+  // Los cambios posteriores van por `updateConversationalRegistration`.
+  // Cada simulación del panel es una prueba nueva, aunque se repita con el mismo proveedor.
+  const idempotencyKey = `${source.channel}:${source.handle}:${source.providerId ?? 'sin-candidato'}`
+    + (source.simulationId ? `:simulacion-${source.simulationId}` : '');
+  const consentSource = source.simulationId
+    ? 'whatsapp-simulacion'
+    : source.channel === 'whatsapp' ? 'whatsapp-bot' : 'chat-prueba';
 
   const client = await pool.connect();
   let began = false;
@@ -52,19 +61,24 @@ export async function saveConversationalRegistration(draft: RegistrationDraft, s
           privacy_consent, privacy_consent_at, marketing_consent, marketing_consent_at,
           consent_source, consent_text_version, form_version, idempotency_key, form_payload)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,now(),$10,CASE WHEN $10 THEN now() ELSE NULL END,
-               $11,'v1','chat-v1',$12,$13)
+               $11,'chat-v2','chat-agent-v1',$12,$13)
        ON CONFLICT (idempotency_key) DO NOTHING
        RETURNING submission_id`,
       [
         // La ficha queda atada al candidato cuando la conversación salió de uno: así el operador
         // ve la respuesta sobre el proveedor que ya tenía, en vez de como un registro suelto.
         source.providerId ?? null,
-        draft.full_name, draft.email, draft.phone ?? source.handle, draft.company_name,
-        draft.products, draft.services, draft.volume_min, draft.volume_max,
+        draft.full_name ?? null, draft.email ?? null, draft.phone ?? source.handle, draft.company_name,
+        draft.products ?? [], draft.services ?? [], draft.volume_min ?? null, draft.volume_max ?? null,
         draft.marketing_consent === true,
-        source.channel === 'whatsapp' ? 'whatsapp-bot' : 'chat-prueba',
+        consentSource,
         idempotencyKey,
-        JSON.stringify({ description: draft.description ?? null, channel: source.channel, handle: source.handle }),
+        JSON.stringify({
+          description: draft.description ?? null,
+          channel: source.channel,
+          handle: source.handle,
+          ...(source.simulationId ? { simulacion: true } : {}),
+        }),
       ],
     );
 
@@ -77,8 +91,9 @@ export async function saveConversationalRegistration(draft: RegistrationDraft, s
     // El paso a `unconfirmed` solo aplica si la conversación salió de un candidato nuestro. El
     // guardia por `status = 'candidate'` evita que un registro tardío haga retroceder una ficha que
     // ya pasó por revisión humana, igual que en el formulario del correo.
+    // Una simulación no toca al proveedor real: quien respondió era alguien del equipo haciendo de él.
     let providerPromoted = false;
-    if (source.providerId) {
+    if (source.providerId && !source.simulationId) {
       const promoted = await client.query<{ provider_id: string }>(
         `UPDATE marketplace.providers SET status = 'unconfirmed', updated_at = now()
          WHERE provider_id = $1 AND status = 'candidate'
@@ -107,6 +122,66 @@ export async function saveConversationalRegistration(draft: RegistrationDraft, s
     if (began) { try { await client.query('ROLLBACK'); } catch { /* la conexión ya no sirve */ } }
     console.error('conversational registration write failed', error instanceof Error ? error.message : error);
     return { ok: false, reason: 'WRITE_FAILED' };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Aplica a una ficha ya guardada lo que el proveedor cambió después, en el seguimiento.
+ *
+ * Solo se reescribe mientras nadie la ha resuelto (`new` o `reviewing`): una ficha aprobada o
+ * rechazada es una decisión humana y el agente no la toca. En ese caso el cambio queda solo en el
+ * registro de auditoría para que el equipo lo vea. Siempre se deja el antes y el después.
+ */
+export async function updateConversationalRegistration(
+  submissionId: string,
+  before: RegistrationDraft,
+  after: RegistrationDraft,
+  source: { channel: 'whatsapp' | 'chat-prueba'; handle: string },
+): Promise<boolean> {
+  if (!pool) return false;
+  const client = await pool.connect();
+  let began = false;
+  try {
+    await client.query('BEGIN');
+    began = true;
+
+    const updated = await client.query<{ submission_id: string }>(
+      `UPDATE marketplace.registration_submissions
+       SET full_name = $2, email = $3, phone = COALESCE($4, phone), company_name = $5,
+           products = $6, services = $7, volume_min = $8, volume_max = $9,
+           form_payload = form_payload || jsonb_build_object('description', $10::text),
+           updated_at = now()
+       WHERE submission_id = $1 AND submission_status IN ('new', 'reviewing')
+       RETURNING submission_id`,
+      [
+        submissionId,
+        after.full_name ?? null, after.email ?? null, after.phone ?? null, after.company_name ?? null,
+        after.products ?? [], after.services ?? [], after.volume_min ?? null, after.volume_max ?? null,
+        after.description ?? null,
+      ],
+    );
+
+    await client.query(
+      `INSERT INTO marketplace.audit_log (actor_id, action, entity_type, entity_id, before_state, after_state, metadata)
+       VALUES ($1, $2, 'registration_submission', $3, $4::jsonb, $5::jsonb, $6::jsonb)`,
+      [
+        `${source.channel}-bot`,
+        updated.rows.length ? 'registration.updated_by_provider' : 'registration.change_requested',
+        submissionId,
+        JSON.stringify(before),
+        JSON.stringify(after),
+        JSON.stringify({ channel: source.channel, handle: source.handle }),
+      ],
+    );
+
+    await client.query('COMMIT');
+    return true;
+  } catch (error) {
+    if (began) { try { await client.query('ROLLBACK'); } catch { /* la conexión ya no sirve */ } }
+    console.error('conversational registration update failed', error instanceof Error ? error.message : error);
+    return false;
   } finally {
     client.release();
   }

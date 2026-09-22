@@ -66,6 +66,40 @@ Primer lote importado desde `C:\Users\davidt\Downloads\omnisend-playground\leads
 
 La primera versión no convierte un correo público en permiso de marketing: los contactos descubiertos por curaduría quedan en `unknown`. Solo el formulario público con la casilla de marketing marcada los vuelve elegibles para una campaña.
 
+## Agente de conversación (WhatsApp)
+
+Cuando un proveedor contesta por WhatsApp, lo atiende un agente que conversa libremente: no hay
+guion ni orden de preguntas. Vive en `src/lib/conversation-agent.ts` y usa la API de Gemini
+(`GEMINI_API_KEY`, modelo `GEMINI_CHAT_MODEL`, por defecto `gemini-3.5-flash-lite`), ~1.5-3 s por
+respuesta. El chat de prueba del panel pasa por el mismo motor (`conversation-runner.ts`).
+
+- **Personalizado:** en cada turno recibe la ficha del proveedor que dejó la curaduría (reputación
+  por plataforma, zona, Instagram, web, por qué nos interesó), una guía de qué importa en su
+  categoría, lo ya anotado y los últimos 40 mensajes.
+- **Libre:** nada es obligatorio. Lo que el proveedor cuenta se anota con la herramienta
+  `anotar_datos`, que valida cada campo con las reglas del formulario web; una persona del equipo
+  completa lo que falte. Para guardar solo hacen falta el nombre del negocio y la autorización.
+- **La autorización la decide el código:** el agente solo puede pedirla (`pedir_autorizacion`); el
+  texto legal lo añade el código y el sí o el no se leen del mensaje literal (`readConsentReply`).
+  Con el sí, la ficha se guarda antes de que el agente conteste.
+- **Seguimiento:** guardar no cierra la conversación. El agente conoce el estado de la revisión y,
+  si el proveedor cambia algo, actualiza la ficha mientras esté en `new`/`reviewing` (con el antes y
+  el después en `audit_log`).
+- **Límites:** las bajas ("no me escriban") se atienden antes del modelo. El agente no tiene más
+  herramientas que esas tres: no lee disco, no navega ni consulta la base.
+
+### Simular un contacto desde el panel
+
+"Simular WhatsApp" (en la lista de proveedores y en su ficha) abre WhatsApp con `id: <proveedor>`
+hacia el número de Happia. Al enviarlo, el sistema responde como si le hubiera escrito primero a ese
+proveedor: la misma invitación que recibe el proveedor real y la conversación reiniciada con su
+ficha precargada. Desde ahí, quien prueba contesta en el papel del proveedor. Cada nuevo `id: ...`
+reinicia la conversación, así que se pueden probar varios proveedores desde un mismo teléfono.
+
+Solo funciona desde los números de `WHATSAPP_SIMULATION_NUMBERS` (separados por comas; `*` para
+cualquiera). La ficha que resulte se guarda con `consent_source = 'whatsapp-simulacion'` y no cambia
+el estado del proveedor real; decir "no me interesa" en una simulación no bloquea el número.
+
 ## Envío de campañas (Omnisend)
 
 El envío real de campañas (`/api/campaigns`, `sendCampaign` en `src/lib/campaigns.ts`) y la prueba QA
