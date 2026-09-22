@@ -131,6 +131,25 @@ export function redirectTarget(): string | null {
 }
 
 /**
+ * El teléfono de prueba al que debe salir un envío concreto.
+ *
+ * Sin modo prueba devuelve null y el mensaje va a su destinatario real. Con modo prueba, quien envía
+ * puede escribir cualquier número (para probar con un teléfono que no esté en la lista del
+ * servidor); si lo que escribe no parece un número, se usa el primero de la lista.
+ */
+export function normalizeTestNumber(raw: string | undefined): string | null {
+  const digits = (raw ?? '').replace(/\D/g, '');
+  // Un móvil colombiano sin indicativo (10 dígitos que empiezan por 3) se completa con 57.
+  const normalized = digits.length === 10 && digits.startsWith('3') ? `57${digits}` : digits;
+  return normalized.length >= 10 && normalized.length <= 15 ? normalized : null;
+}
+
+export function resolveTestTarget(requested?: string, numbers = testNumbers()): string | null {
+  if (!numbers.length) return null;
+  return normalizeTestNumber(requested) ?? numbers[0];
+}
+
+/**
  * A dónde sale de verdad un mensaje. Si el destino ya es un teléfono de prueba se respeta: así el
  * agente le contesta a quien está probando desde el segundo número, en vez de al primero.
  */
@@ -144,11 +163,13 @@ function deliverTo(to: string) {
  * Mensaje libre. Solo es válido dentro de la ventana de servicio de 24h; fuera de ella Meta lo
  * rechaza y hay que usar una plantilla aprobada.
  */
-export function sendText(to: string, body: string) {
+export function sendText(to: string, body: string, options: { exact?: boolean } = {}) {
   return graph('/messages', {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to: deliverTo(to),
+    // `exact` lo usa quien ya resolvió a qué teléfono de prueba va (`resolveTestTarget`): si no, un
+    // número escrito a mano acabaría redirigido al primero de la lista.
+    to: options.exact ? to : deliverTo(to),
     type: 'text',
     text: { preview_url: false, body: body.slice(0, 4096) },
   });
@@ -158,11 +179,11 @@ export function sendText(to: string, body: string) {
  * Plantilla aprobada: la única vía para escribir primero o para retomar una conversación fuera de
  * las 24h. El nombre y el idioma tienen que existir aprobados en la cuenta.
  */
-export function sendTemplate(to: string, templateName: string, languageCode = 'es', parameters: string[] = []) {
+export function sendTemplate(to: string, templateName: string, languageCode = 'es', parameters: string[] = [], options: { exact?: boolean } = {}) {
   return graph('/messages', {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to: deliverTo(to),
+    to: options.exact ? to : deliverTo(to),
     type: 'template',
     template: {
       name: templateName,

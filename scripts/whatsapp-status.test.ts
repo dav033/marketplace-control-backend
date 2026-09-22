@@ -1,7 +1,7 @@
 // Estado del contacto por WhatsApp y modo prueba. Sin red ni base.
 import assert from 'node:assert/strict';
 import { applyStatusEvents, nextStatus, type StatusChange } from '../src/lib/conversation-status.ts';
-import { redirectTarget, testNumbers } from '../src/lib/whatsapp.ts';
+import { normalizeTestNumber, redirectTarget, resolveTestTarget, testNumbers } from '../src/lib/whatsapp.ts';
 
 const vacio: StatusChange = { status: null, reason: null };
 
@@ -49,7 +49,18 @@ assert.equal(redirectTarget(), '573185391610');
 process.env.WHATSAPP_REDIRECT_ALL_TO = '3185391610, 316 867 8691';
 assert.deepEqual(testNumbers(), ['573185391610', '573168678691'], 'varios teléfonos de prueba, separados por comas');
 assert.equal(redirectTarget(), '573185391610', 'el primero es el de por defecto');
+// Un número escrito a mano: se normaliza y manda sobre la lista del servidor.
+process.env.WHATSAPP_REDIRECT_ALL_TO = '573185391610,573168678691';
+assert.equal(resolveTestTarget('300 555 1122'), '573005551122', 'el número escrito gana');
+assert.equal(resolveTestTarget('+1 415 555 0100'), '14155550100', 'también vale uno de fuera');
+assert.equal(resolveTestTarget('123'), '573185391610', 'lo que no parece teléfono cae al primero');
+assert.equal(resolveTestTarget(undefined), '573185391610');
+assert.equal(normalizeTestNumber('3005551122'), '573005551122');
+assert.equal(normalizeTestNumber('123'), null);
+assert.equal(normalizeTestNumber(undefined), null);
+
 delete process.env.WHATSAPP_REDIRECT_ALL_TO;
 assert.deepEqual(testNumbers(), []);
+assert.equal(resolveTestTarget('3005551122'), null, 'sin modo prueba no se redirige nada');
 
 console.log('whatsapp status tests passed');

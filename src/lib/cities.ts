@@ -1,5 +1,5 @@
 import { pool, query } from './db';
-import { isWhatsappConfigured, sendTemplate, testNumbers } from './whatsapp';
+import { isWhatsappConfigured, resolveTestTarget, sendTemplate } from './whatsapp';
 import { countOutreachToday, isSuppressed, recordOutboundMessage, startConversation } from './whatsapp-store';
 import { dailyLimit, toWhatsappNumber } from './whatsapp-outreach';
 import { stateFromProvider } from './conversation-runner';
@@ -195,9 +195,7 @@ export async function announceCity(cityId: string, options: { testNumber?: strin
   const emailTargets = plan.targets.filter((target) => target.channel === 'email');
 
   // --- WhatsApp: una plantilla por proveedor, respetando cupo, bajas y modo prueba ---
-  const numbers = testNumbers();
-  const requested = options.testNumber?.replace(/\D/g, '');
-  const redirect = numbers.length ? (requested && numbers.includes(requested) ? requested : numbers[0]) : null;
+  const redirect = resolveTestTarget(options.testNumber);
   const templateName = cityTemplateName();
   let enviadosHoy = await countOutreachToday();
 
@@ -210,7 +208,7 @@ export async function announceCity(cityId: string, options: { testNumber?: strin
 
     const transcript = announcementTranscript(target.displayName, plan.city.name);
     try {
-      await sendTemplate(redirect ?? target.phone!, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', [target.displayName, plan.city.name]);
+      await sendTemplate(redirect ?? target.phone!, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', [target.displayName, plan.city.name], { exact: Boolean(redirect) });
     } catch (error) {
       console.error('anuncio de ciudad falló', target.providerId, error instanceof Error ? error.message : error);
       await recordAnnouncement(cityId, target.providerId, 'whatsapp', 'failed', 'SEND_FAILED');

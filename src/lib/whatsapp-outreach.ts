@@ -1,4 +1,4 @@
-import { isWhatsappConfigured, sendTemplate, testNumbers } from './whatsapp';
+import { isWhatsappConfigured, resolveTestTarget, sendTemplate } from './whatsapp';
 import { countOutreachToday, getConversation, isSuppressed, recordOutboundMessage, startConversation } from './whatsapp-store';
 import { stateFromProvider } from './conversation-runner';
 import { setProviderWhatsappStatus } from './data';
@@ -85,10 +85,8 @@ export async function startOutreach(
   // En modo prueba el mensaje le llega a quien prueba, no al proveedor: la conversación se guarda con
   // su número, que es desde donde contestará, y no se miran las bajas ni las conversaciones del
   // número real, porque a ese número no se le escribe.
-  // Con varios teléfonos de prueba, quien envía elige a cuál; uno que no esté en la lista no vale.
-  const numbers = testNumbers();
-  const requested = options.testNumber?.replace(/\D/g, '');
-  const redirect = numbers.length ? (requested && numbers.includes(requested) ? requested : numbers[0]) : null;
+  // Con modo prueba, quien envía elige el teléfono: uno de los del servidor o uno escrito a mano.
+  const redirect = resolveTestTarget(options.testNumber);
   const to = redirect ?? realTo;
   if (!redirect) {
     // Quien pidió que no le escribamos manda sobre todo lo demás, incluso sobre una campaña nueva.
@@ -104,7 +102,7 @@ export async function startOutreach(
     await sendTemplate(redirect ?? realTo, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', [
       seed.displayName.trim(),
       seed.city ?? 'tu ciudad',
-    ]);
+    ], { exact: Boolean(redirect) });
   } catch (error) {
     console.error('whatsapp outreach failed', realTo, error instanceof Error ? error.message : error);
     return { ok: false, reason: 'SEND_FAILED' };

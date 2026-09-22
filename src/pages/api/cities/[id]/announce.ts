@@ -2,13 +2,14 @@ import type { APIRoute } from 'astro';
 import { announceCity, announcementPlan, cityTemplateName } from '../../../../lib/cities';
 import { dailyLimit } from '../../../../lib/whatsapp-outreach';
 import { countOutreachToday } from '../../../../lib/whatsapp-store';
-import { isWhatsappConfigured, redirectTarget, testNumbers } from '../../../../lib/whatsapp';
+import { isWhatsappConfigured, normalizeTestNumber, redirectTarget, testNumbers } from '../../../../lib/whatsapp';
 
 /**
  * El anuncio de apertura de una ciudad.
  *
- * GET devuelve la vista previa (a cuántos y por qué canal) y POST lo envía con `confirm: true`. Va
- * detrás del Basic Auth del panel, como el contacto saliente: manda mensajes reales.
+ * GET devuelve la vista previa (a cuántos y por qué canal) y POST lo envía con `confirm: true`. Como
+ * el contacto saliente, no es pública: hace falta la sesión del panel o el Basic Auth del operador,
+ * porque manda mensajes reales.
  */
 
 function json(body: unknown, status = 200) {
@@ -52,8 +53,13 @@ export const POST: APIRoute = async ({ request, params }) => {
 
   if (payload.confirm !== true) return json({ ok: false, error: 'CONFIRMATION_REQUIRED' }, 400);
 
-  const testNumber = typeof payload.testNumber === 'string' ? payload.testNumber.replace(/\D/g, '') : undefined;
-  if (testNumber && !testNumbers().includes(testNumber)) return json({ ok: false, error: 'INVALID_TEST_NUMBER' }, 400);
+  // En modo prueba, quien envía puede escribir cualquier teléfono, no solo los de la lista del
+  // servidor: es su propio teléfono de pruebas. Fuera de modo prueba no se redirige nada.
+  const testNumber = typeof payload.testNumber === 'string' && payload.testNumber.trim() ? payload.testNumber.trim() : undefined;
+  if (testNumber) {
+    if (!testNumbers().length) return json({ ok: false, error: 'TEST_MODE_OFF' }, 400);
+    if (!normalizeTestNumber(testNumber)) return json({ ok: false, error: 'INVALID_TEST_NUMBER' }, 400);
+  }
 
   const result = await announceCity(params.id ?? '', { testNumber });
   if (result === 'NOT_FOUND') return json({ ok: false, error: 'NOT_FOUND' }, 404);

@@ -2,16 +2,17 @@ import type { APIRoute } from 'astro';
 import { getOutreachSeeds } from '../../../lib/data';
 import { dailyLimit, startOutreachBatch, type BatchOutreachResult } from '../../../lib/whatsapp-outreach';
 import { countOutreachToday } from '../../../lib/whatsapp-store';
-import { isWhatsappConfigured, redirectTarget, testNumbers } from '../../../lib/whatsapp';
+import { isWhatsappConfigured, normalizeTestNumber, redirectTarget, testNumbers } from '../../../lib/whatsapp';
 
 const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
 
 /**
  * Dispara el contacto saliente por WhatsApp, uno o en lote desde la tabla de proveedores.
  *
- * Va detrás del Basic Auth del panel: el middleware solo deja pública la ruta exacta del webhook,
- * no todo `/api/whatsapp`. Exige `confirm: true`, igual que el envío de campañas por correo: esto
- * manda mensajes reales y no puede salir por un clic accidental ni por una petición perdida.
+ * No es pública: el middleware solo abre la ruta exacta del webhook, y aquí hace falta la sesión del
+ * panel (el frontend añade el token de servicio) o el Basic Auth del operador. Exige `confirm: true`,
+ * igual que el envío de campañas por correo: manda mensajes reales y no puede salir por un clic
+ * accidental ni por una petición perdida.
  */
 
 /** Más de esto por llamada es otra cosa que un envío desde el panel; el panel manda tandas de 50. */
@@ -55,8 +56,13 @@ export const POST: APIRoute = async ({ request }) => {
 
   // El número de prueba solo puede ser uno de la lista del servidor: el panel elige entre ellos,
   // nunca manda a un número cualquiera.
-  const testNumber = typeof payload.testNumber === 'string' ? payload.testNumber.replace(/\D/g, '') : undefined;
-  if (testNumber && !testNumbers().includes(testNumber)) return json({ ok: false, error: 'INVALID_TEST_NUMBER' }, 400);
+  // En modo prueba, quien envía puede escribir cualquier teléfono, no solo los de la lista del
+  // servidor: es su propio teléfono de pruebas. Fuera de modo prueba no se redirige nada.
+  const testNumber = typeof payload.testNumber === 'string' && payload.testNumber.trim() ? payload.testNumber.trim() : undefined;
+  if (testNumber) {
+    if (!testNumbers().length) return json({ ok: false, error: 'TEST_MODE_OFF' }, 400);
+    if (!normalizeTestNumber(testNumber)) return json({ ok: false, error: 'INVALID_TEST_NUMBER' }, 400);
+  }
 
   // Los datos del candidato salen de la base, no del navegador: quien llama elige A QUIÉN se
   // escribe, nunca QUÉ se le escribe ni con qué teléfono.

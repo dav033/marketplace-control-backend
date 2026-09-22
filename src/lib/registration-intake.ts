@@ -91,10 +91,11 @@ export async function saveConversationalRegistration(
     // El paso a `unconfirmed` solo aplica si la conversación salió de un candidato nuestro. El
     // guardia por `status = 'candidate'` evita que un registro tardío haga retroceder una ficha que
     // ya pasó por revisión humana, igual que en el formulario del correo.
-    // Una simulación o una prueba desde el panel no tocan al proveedor real: quien respondió era
-    // alguien del equipo haciendo de él.
+    // El proveedor pasa a "registrado" también cuando la ficha vino de una prueba o una simulación:
+    // el recorrido tiene que verse entero (Proveedores → Preregistrados) mientras se prueba. La ficha
+    // queda marcada por su `consent_source`, y desde Preregistrados se puede quitar en un clic.
     let providerPromoted = false;
-    if (source.providerId && source.channel === 'whatsapp' && !source.simulationId) {
+    if (source.providerId) {
       const promoted = await client.query<{ provider_id: string }>(
         `UPDATE marketplace.providers SET status = 'unconfirmed', updated_at = now()
          WHERE provider_id = $1 AND status = 'candidate'
@@ -110,7 +111,7 @@ export async function saveConversationalRegistration(
           `${source.channel}-bot`,
           source.providerId,
           JSON.stringify({ status: providerPromoted ? 'unconfirmed' : null }),
-          JSON.stringify({ submission_id: row.submission_id, channel: source.channel, handle: source.handle, status_changed: providerPromoted }),
+          JSON.stringify({ submission_id: row.submission_id, channel: source.channel, handle: source.handle, status_changed: providerPromoted, test: Boolean(source.simulationId) }),
         ],
       );
     }
