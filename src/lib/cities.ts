@@ -1,4 +1,5 @@
 import { pool, query } from './db';
+import { REGISTER_URL } from './registration-fields';
 import { fillTemplate, getTemplateInfo, isWhatsappConfigured, resolveTestTarget, sendTemplate } from './whatsapp';
 import { countOutreachToday, isSuppressed, recordOutboundMessage, startConversation } from './whatsapp-store';
 import { dailyLimit, toWhatsappNumber } from './whatsapp-outreach';
@@ -21,7 +22,6 @@ import type { SeedProvider } from './registration-chat';
  * consentimiento, WhatsApp si no.
  */
 
-const REGISTER_URL = 'https://www.happia.co/register';
 const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
 
 export type CityStatus = 'cerrada' | 'abierta';

@@ -25,6 +25,8 @@ export type ProviderProfile = {
   instagram: string | null;
   /** Por qué la curaduría lo consideró apto, tal como lo escribió. */
   curationReason: string | null;
+  /** Su ciudad ya está abierta: puede registrarse él mismo hoy, sin esperar a que abramos. */
+  cityOpen: boolean;
   sources: Array<{ name: string; rating: number | null; reviews: number | null }>;
 };
 
@@ -54,10 +56,15 @@ export async function loadProviderProfile(providerId: string): Promise<ProviderP
   const [providers, sources] = await Promise.all([
     query<{
       provider_id: string; display_name: string; category: string; additional_categories: string[] | null;
-      city: string; address: string | null; website_url: string | null;
+      city: string; address: string | null; website_url: string | null; city_open: boolean;
     }>(
-      `SELECT provider_id, display_name, category, additional_categories, city, address, website_url
-       FROM marketplace.providers WHERE provider_id = $1`,
+      // Si su ciudad ya está abierta puede registrarse solo; si no, el enlace lo llevaría a una
+      // ciudad donde todavía no operamos, así que el agente necesita saberlo antes de hablar.
+      `SELECT p.provider_id, p.display_name, p.category, p.additional_categories, p.city, p.address, p.website_url,
+              COALESCE((SELECT c.status = 'abierta' FROM marketplace.cities c
+                        WHERE lower(trim(p.city)) = lower(c.name)
+                        ORDER BY c.status DESC LIMIT 1), false) AS city_open
+       FROM marketplace.providers p WHERE p.provider_id = $1`,
       [providerId],
     ),
     query<{ source_name: string; observed_rating: string | null; observed_reviews: number | null; normalized: NormalizedEvidence | null }>(
@@ -90,6 +97,7 @@ export async function loadProviderProfile(providerId: string): Promise<ProviderP
     scale: clean(evidence.scale),
     instagram: clean(evidence.instagram),
     curationReason: clean(evidence.curationReason),
+    cityOpen: row.city_open === true,
     sources: sources.rows
       .filter((source) => source.observed_rating !== null || source.observed_reviews !== null)
       .map((source) => ({
@@ -129,6 +137,10 @@ export function describeProfile(profile: ProviderProfile): string {
     .map((source) => `${source.name} ${source.rating}★ (${source.reviews} reseñas)`);
   if (reputacion.length) lines.push(`- Reputación pública: ${reputacion.join('; ')}`);
   if (profile.curationReason) lines.push(`- Por qué nos interesó: ${profile.curationReason}`);
+  // Lo primero que decide el agente: si puede mandarlo al registro hoy o si todavía no hay dónde.
+  lines.push(profile.cityOpen
+    ? `- Happia YA está abierto en ${profile.city}: puede registrarse hoy mismo.`
+    : `- Happia todavía NO está abierto en ${profile.city}.`);
   return lines.join('\n');
 }
 

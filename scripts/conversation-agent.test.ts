@@ -38,6 +38,7 @@ const profile: ProviderProfile = {
   scale: null,
   instagram: '@atalu.eventos',
   curationReason: 'Catering de bodas con reseñas consistentes',
+  cityOpen: true,
   sources: [{ name: 'Google', rating: 4.8, reviews: 124 }, { name: 'Instagram', rating: null, reviews: null }],
 };
 
@@ -112,11 +113,19 @@ for (const duda of ['¿para qué es?', 'sí? para qué lo usan', 'no sé', 'hola
   assert.match(system, /entrega a domicilio, paquetes para eventos/, 'con servicios típicos para usar de ejemplo');
   assert.match(system, /estilos y temáticas/, 'y la de su categoría adicional');
   assert.match(system, /vimos que ofreces/, 'el agente dice abiertamente lo que sabemos');
+  assert.match(system, /YA está abierto en Barranquilla/, 'con la ciudad abierta puede mandarlo al registro');
+  assert.match(system, /happia\.co\/register/, 'y tiene el enlace a mano');
   assert.doesNotMatch(system, /Instagram null/, 'lo que no se sabe no se inventa');
+
+  // Con la ciudad cerrada el enlace no sirve de nada: el agente tiene que verlo en la ficha.
+  const cerrada = buildSystemInstruction({ userMessage: 'hola', draft: {}, history: [], profile: { ...profile, cityOpen: false }, registration: null });
+  assert.match(cerrada, /todavía NO está abierto en Barranquilla/);
+  assert.doesNotMatch(cerrada, /YA está abierto en Barranquilla/, 'la regla general del prompt sigue, pero su ficha no dice que esté abierta');
 
   const sinFicha = buildSystemInstruction({ userMessage: 'hola', draft: {}, history: [], profile: null, registration: null, profileName: 'Caro' });
   assert.match(sinFicha, /nos escribió sin que lo hubiéramos contactado/);
   assert.match(sinFicha, /Caro/);
+  assert.match(sinFicha, /No le des el enlace de registro/, 'sin ficha no sabemos si su ciudad está abierta');
 }
 
 // --- converse: herramientas, firma de Gemini y rechazos ---
