@@ -163,6 +163,11 @@ function deliverTo(to: string) {
  * Mensaje libre. Solo es válido dentro de la ventana de servicio de 24h; fuera de ella Meta lo
  * rechaza y hay que usar una plantilla aprobada.
  */
+/**
+ * `exact` es obligatorio cuando el destinatario es quien acaba de escribirnos: contestarle a otro
+ * número es justo lo que pasaba al probar con un teléfono que no estaba en la lista del servidor
+ * (llegaba la invitación, pero la respuesta del agente se iba al teléfono de prueba por defecto).
+ */
 export function sendText(to: string, body: string, options: { exact?: boolean } = {}) {
   return graph('/messages', {
     messaging_product: 'whatsapp',

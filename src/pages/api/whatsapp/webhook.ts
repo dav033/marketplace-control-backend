@@ -121,7 +121,7 @@ async function handleMessage(message: InboundMessage) {
       }
       if (isWhatsappConfigured()) {
         const despedida = 'Listo, no te volvemos a escribir. Gracias por tu tiempo.';
-        await sendText(message.from, despedida).catch(() => {});
+        await sendText(message.from, despedida, { exact: true }).catch(() => {});
         await recordOutboundMessage(message.from, despedida);
       }
       return;
@@ -174,14 +174,14 @@ async function handleMessage(message: InboundMessage) {
       await suppress(message.from, 'rechazó el registro en la conversación', 'whatsapp-declined');
     }
 
-    await sendText(message.from, turn.reply);
+    await sendText(message.from, turn.reply, { exact: true });
     await recordOutboundMessage(message.from, turn.reply);
   } catch (error) {
     // El detalle crudo se queda en el log del servidor. Al proveedor no se le cuenta qué falló ni
     // con qué tecnología: solo que hubo un problema y que habrá una persona.
     console.error('whatsapp reply failed', message.from, error instanceof Error ? error.message : error);
     if (isWhatsappConfigured() && !(await isSuppressed(message.from))) {
-      await sendText(message.from, 'Tuvimos un problema para responderte en este momento. Una persona del equipo se pondrá en contacto contigo más adelante.').catch(() => {});
+      await sendText(message.from, 'Tuvimos un problema para responderte en este momento. Una persona del equipo se pondrá en contacto contigo más adelante.', { exact: true }).catch(() => {});
     }
   }
 }
@@ -202,7 +202,7 @@ async function handleSimulation(message: InboundMessage, providerId: string) {
     const aviso = start.reason === 'NOT_ALLOWED'
       ? 'Este número no está habilitado para simular conversaciones.'
       : 'No encontré ese proveedor. Vuelve a lanzar la simulación desde el panel.';
-    await sendText(message.from, aviso).catch(() => {});
+    await sendText(message.from, aviso, { exact: true }).catch(() => {});
     await recordOutboundMessage(message.from, aviso);
     return;
   }
@@ -216,7 +216,7 @@ async function handleSimulation(message: InboundMessage, providerId: string) {
   if (Date.now() - message.timestampMs >= SERVICE_WINDOW_MS) return;
 
   await markAsRead(message.messageId).catch(() => {});
-  await sendText(message.from, start.opening);
+  await sendText(message.from, start.opening, { exact: true });
   await saveState(message.from, start.state);
   await recordOutboundMessage(message.from, start.opening);
 }

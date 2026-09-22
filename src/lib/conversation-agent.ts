@@ -133,6 +133,7 @@ Tu objetivo: conocer de verdad su negocio para que la ficha lo represente bien. 
 - Adapta los ejemplos al tipo de negocio y a lo que sabemos de él; no sugieras servicios que no encajan.
 - No preguntes lo que ya te dijo o lo que ya está anotado.
 - Nada es obligatorio. Si algo no quiere contarlo, no insistas: sigue con otra cosa.
+- El número de asistentes es lo más difícil de contestar: acepta lo que diga. Un solo número ("unos 50") vale; "de 50 a 300" también; "depende del evento", "grandes y pequeños" o "no sabría decirte" NO son un número: anótalo en notas tal cual y pasa a otra cosa. Nunca preguntes dos veces por el rango.
 - Cosas útiles para la ficha, sin orden ni obligación: qué ofrece en concreto, los servicios que da, para cuántos asistentes suele trabajar y lo que lo haga diferente.
 - Datos de contacto: antes de pedir la autorización, pídele en un mismo mensaje su nombre y un correo de contacto (por ejemplo: "Para tu ficha, ¿me compartes tu nombre y un correo de contacto?"). Si ya te dio uno de los dos, pide solo el que falta. Si no quiere darlos, no insistas.
 
@@ -175,8 +176,8 @@ const TOOLS: FunctionDeclaration[] = [
           description: `Productos o servicios concretos que ofrece, en frases cortas de hasta 60 caracteres (máximo ${MAX_PRODUCTS} en total). Ej.: "menú de boda", "estación de postres". Los tipos de evento que atiende (bodas, eventos de empresa) no son productos: van en notas.`,
           items: { type: 'string' },
         },
-        volume_min: { type: 'integer', description: 'Mínimo de asistentes con el que suele trabajar. Si solo dice un máximo, usa 1.' },
-        volume_max: { type: 'integer', description: 'Máximo de asistentes con el que suele trabajar.' },
+        volume_min: { type: 'integer', description: 'Mínimo de asistentes. Si dice un solo número ("unos 50", "para 200"), pon ese mismo número en los dos.' },
+        volume_max: { type: 'integer', description: 'Máximo de asistentes. Si no sabe o depende del evento, no mandes ninguno de los dos y anótalo en notas.' },
         // Se llama `notas` y no `description` a propósito: con ese nombre el modelo copiaba dentro la
         // descripción de la propia herramienta en vez de lo que dijo el proveedor.
         notas: { type: 'string', description: 'Algo relevante que dijo y no encaja en lo anterior: tipos de evento que atiende, especialidad, zonas que cubre, años de experiencia, lo que lo diferencia.' },
@@ -290,10 +291,13 @@ export function applyNotes(draft: RegistrationDraft, args: Record<string, unknow
   }
 
   if (args.volume_min !== undefined || args.volume_max !== undefined) {
-    const max = args.volume_max ?? args.volume_min;
-    const min = args.volume_min ?? 1;
+    // Un solo número vale: "unos 50" se guarda como 50 a 50, no como "de 1 a 50", que era lo que
+    // salía antes al rellenar el mínimo por nuestra cuenta. Y si vienen al revés, se ordenan.
+    const primero = Number(args.volume_min ?? args.volume_max);
+    const segundo = Number(args.volume_max ?? args.volume_min);
+    const [min, max] = primero <= segundo ? [primero, segundo] : [segundo, primero];
     const volume = parseVolume(String(min), String(max));
-    if (!volume) reject('volume', `${String(min)}-${String(max)}`, 'el rango de asistentes no es válido');
+    if (!volume) reject('volume', `${String(min)}-${String(max)}`, 'no parece un número de asistentes; si no lo tiene claro, no lo anotes y sigue');
     else { next.volume_min = volume.min; next.volume_max = volume.max; saved.push('volume'); }
   }
 

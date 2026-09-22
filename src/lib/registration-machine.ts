@@ -442,7 +442,8 @@ export function summarize(draft: RegistrationDraft): string {
     `Teléfono: ${draft.phone ?? 'el de este WhatsApp'}`,
     `Categorías: ${draft.services?.join(', ') ?? '—'}`,
     `Ofrece: ${draft.products?.join(', ') ?? '—'}`,
-    `Asistentes: de ${draft.volume_min ?? '—'} a ${draft.volume_max ?? '—'}`,
+    // Un solo número se guarda con mínimo y máximo iguales: decir "de 50 a 50" parece un error.
+    `Asistentes: ${draft.volume_min === undefined ? '—' : draft.volume_min === draft.volume_max ? `unos ${draft.volume_min}` : `de ${draft.volume_min} a ${draft.volume_max}`}`,
   ];
   if (draft.description) lines.push(`Nota: ${draft.description}`);
   lines.push(`Novedades comerciales: ${draft.marketing_consent ? 'sí' : 'no'}`);

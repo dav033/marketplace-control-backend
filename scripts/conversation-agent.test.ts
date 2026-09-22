@@ -55,7 +55,7 @@ const profile: ProviderProfile = {
   assert.equal(draft.email, 'andres@atalu.co', 'el correo se guarda en minúsculas, como exige la tabla');
   assert.deepEqual(draft.products, ['menú de boda', 'estación de postres'], 'lo vetado y lo largo no entran; lo demás sí');
   assert.deepEqual(draft.services, ['Comida y Bebida'], 'solo categorías oficiales');
-  assert.deepEqual([draft.volume_min, draft.volume_max], [1, 300], 'solo un máximo: el mínimo es 1');
+  assert.deepEqual([draft.volume_min, draft.volume_max], [300, 300], 'un solo número: no se inventa un mínimo de 1');
   assert.equal(draft.description, 'Atienden toda la costa');
   assert.ok(saved.includes('products') && saved.includes('email'));
   assert.ok(rejected.some((item) => item.value === 'drogas'), 'lo vetado queda con motivo para que el agente lo explique');
@@ -64,9 +64,13 @@ const profile: ProviderProfile = {
 {
   const { draft, rejected } = applyNotes({}, { email: 'no-es-un-correo', volume_min: 500, volume_max: 20, phone: '12' });
   assert.equal(draft.email, undefined);
-  assert.equal(draft.volume_min, undefined, 'un rango al revés no entra');
+  assert.deepEqual([draft.volume_min, draft.volume_max], [20, 500], 'un rango al revés se ordena en vez de perderse');
   assert.equal(draft.phone, undefined);
-  assert.deepEqual(rejected.map((item) => item.field).sort(), ['email', 'phone', 'volume']);
+  assert.deepEqual(rejected.map((item) => item.field).sort(), ['email', 'phone']);
+
+  // "Unos 50" es una respuesta perfectamente válida: se guarda como 50 a 50.
+  assert.deepEqual(applyNotes({}, { volume_min: 50, volume_max: 50 }).draft, { volume_min: 50, volume_max: 50 });
+  assert.deepEqual(applyNotes({}, { volume_max: 80 }).draft, { volume_min: 80, volume_max: 80 });
 }
 {
   const muchos = Array.from({ length: 12 }, (_, index) => `producto ${index + 1}`);
