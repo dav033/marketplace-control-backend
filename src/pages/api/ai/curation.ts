@@ -5,7 +5,17 @@ import { completeCurationJob, createCurationJob, failCurationJob, getCurationJob
 import { neutralizeAgentText } from '../../../lib/agent-identity';
 
 function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
+  // Con longitud declarada. Sin ella la respuesta sale troceada y sin final claro, y al arrancar la
+  // búsqueda el proxy de Vercel la entregaba vacía: el panel mostraba "Failed to fetch" aunque el
+  // trabajo ya estuviera corriendo.
+  const texto = JSON.stringify(body);
+  return new Response(texto, {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': String(Buffer.byteLength(texto)),
+    },
+  });
 }
 
 function jobPayload(job: ReturnType<typeof getCurationJob>) {
@@ -74,7 +84,9 @@ export const POST: APIRoute = async ({ request }) => {
   if (runningJob) return json({ ...jobPayload(runningJob), reused: true });
 
   const job = createCurationJob({ city: city.trim(), category: category.trim(), targetCount });
-  void (async () => {
+  // El trabajo arranca en el siguiente tick, no dentro de esta petición: así la respuesta con el job
+  // sale antes de que el proceso se ponga a buscar, y el panel siempre la recibe.
+  setTimeout(() => void (async () => {
     try {
       // Se usan los mismos valores recortados con los que se registró el job, para que la búsqueda
       // y la clave de "un job por ciudad y categoría" nunca se separen.
@@ -93,6 +105,6 @@ export const POST: APIRoute = async ({ request }) => {
     } catch (error) {
       failCurationJob(job.jobId, error instanceof Error ? error.message : 'La búsqueda terminó por un error inesperado del agente.');
     }
-  })();
+  })(), 50);
   return json(jobPayload(job));
 };
