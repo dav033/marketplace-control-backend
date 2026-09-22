@@ -130,11 +130,11 @@ export async function isDuplicate(messageId: string, waId: string, body: string,
     return false;
   }
   const result = await query<{ message_id: string }>(
-    `INSERT INTO marketplace.whatsapp_messages (message_id, wa_id, direction, body)
-     VALUES ($1, $2, 'in', $3)
+    `INSERT INTO marketplace.whatsapp_messages (message_id, wa_id, direction, body, provider_id)
+     VALUES ($1, $2, 'in', $3, $4)
      ON CONFLICT (message_id) DO NOTHING
      RETURNING message_id`,
-    [messageId, waId, body.slice(0, 4000)],
+    [messageId, waId, body.slice(0, 4000), providerId ?? null],
   );
   return result.rows.length === 0;
 }
@@ -142,9 +142,9 @@ export async function isDuplicate(messageId: string, waId: string, body: string,
 export async function recordOutboundMessage(waId: string, body: string, providerId?: string | null): Promise<void> {
   if (!pool) return;
   await query(
-    `INSERT INTO marketplace.whatsapp_messages (message_id, wa_id, direction, body)
-     VALUES ($1, $2, 'out', $3) ON CONFLICT (message_id) DO NOTHING`,
-    [`out:${waId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`, waId, body.slice(0, 4000)],
+    `INSERT INTO marketplace.whatsapp_messages (message_id, wa_id, direction, body, provider_id)
+     VALUES ($1, $2, 'out', $3, $4) ON CONFLICT (message_id) DO NOTHING`,
+    [`out:${waId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`, waId, body.slice(0, 4000), providerId ?? null],
   );
 }
 

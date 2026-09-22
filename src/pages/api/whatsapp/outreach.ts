@@ -54,8 +54,6 @@ export const POST: APIRoute = async ({ request }) => {
   if (!ids.length) return json({ ok: false, error: 'PROVIDERS_REQUIRED' }, 400);
   if (ids.length > MAX_PER_REQUEST) return json({ ok: false, error: 'TOO_MANY_PROVIDERS' }, 400);
 
-  // El número de prueba solo puede ser uno de la lista del servidor: el panel elige entre ellos,
-  // nunca manda a un número cualquiera.
   // En modo prueba, quien envía puede escribir cualquier teléfono, no solo los de la lista del
   // servidor: es su propio teléfono de pruebas. Fuera de modo prueba no se redirige nada.
   const testNumber = typeof payload.testNumber === 'string' && payload.testNumber.trim() ? payload.testNumber.trim() : undefined;

@@ -253,7 +253,7 @@ export async function announceCity(
       whatsapp: status,
       ...(redirect ? { testRedirect: { realPhone: target.phone! } } : {}),
     });
-    await recordOutboundMessage(waId, transcript);
+    await recordOutboundMessage(waId, transcript, target.providerId);
     await setProviderWhatsappStatus(target.providerId, status, { sent: true, channel: 'whatsapp', handle: waId, test: Boolean(redirect) }).catch(() => {});
     await recordAnnouncement(cityId, target.providerId, 'whatsapp', 'sent', null);
     results.push({ providerId: target.providerId, displayName: target.displayName, channel: 'whatsapp', ok: true });

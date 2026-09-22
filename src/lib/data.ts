@@ -332,13 +332,17 @@ export async function getProviderConversation(providerId: string): Promise<Provi
   };
   if (!conversation.rowCount) return { ...base, waId: null, esPrueba: false, messages: [] };
 
+  // Por proveedor cuando el mensaje lo recuerda; si no (mensajes anteriores a esa columna), por
+  // número. En modo prueba todas las invitaciones comparten teléfono, y sin esto el hilo de cada
+  // ficha mezclaría conversaciones de proveedores distintos.
   const messages = await query<{ direction: 'in' | 'out'; body: string | null; at: string }>(`
     SELECT direction, body, to_char(occurred_at, 'DD Mon, HH24:MI') AS at
     FROM marketplace.whatsapp_messages
-    WHERE wa_id = $1
+    WHERE provider_id = $1
+       OR (provider_id IS NULL AND wa_id = $2)
     ORDER BY occurred_at
     LIMIT 200
-  `, [conversation.rows[0].wa_id]);
+  `, [providerId, conversation.rows[0].wa_id]);
 
   return {
     ...base,

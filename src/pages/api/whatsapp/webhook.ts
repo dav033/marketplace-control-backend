@@ -104,12 +104,13 @@ async function handleMessage(message: InboundMessage) {
   try {
     // El control de duplicados va contra la base: Meta reintenta justo cuando algo falla, que es
     // cuando el registro en memoria se habría perdido al reiniciar.
-    if (await isDuplicate(message.messageId, message.from, message.text)) return;
+    const conocida = await getConversation(message.from);
+    if (await isDuplicate(message.messageId, message.from, message.text, conocida?.state.seed?.providerId)) return;
 
     // Una baja se atiende antes que nada y sin modelo de por medio: ni se procesa el registro ni se
     // le vuelve a escribir.
     if (isOptOut(message.text)) {
-      const conversacion = await getConversation(message.from);
+      const conversacion = conocida;
       if (!isTest(conversacion?.state)) await suppress(message.from, message.text.slice(0, 200), 'whatsapp-inbound');
       console.error('whatsapp: baja solicitada', { waId: message.from });
       if (conversacion) {
@@ -122,7 +123,7 @@ async function handleMessage(message: InboundMessage) {
       if (isWhatsappConfigured()) {
         const despedida = 'Listo, no te volvemos a escribir. Gracias por tu tiempo.';
         await sendText(message.from, despedida, { exact: true }).catch(() => {});
-        await recordOutboundMessage(message.from, despedida);
+        await recordOutboundMessage(message.from, despedida, conversacion?.state.seed?.providerId);
       }
       return;
     }
@@ -135,7 +136,7 @@ async function handleMessage(message: InboundMessage) {
       return;
     }
 
-    const almacenada = await getConversation(message.from);
+    const almacenada = conocida;
     const estadoPrevio = almacenada?.state ?? emptyState();
 
     // Guardar el entrante ANTES de contestar: abre la ventana de 24h y deja constancia aunque la
@@ -175,7 +176,7 @@ async function handleMessage(message: InboundMessage) {
     }
 
     await sendText(message.from, turn.reply, { exact: true });
-    await recordOutboundMessage(message.from, turn.reply);
+    await recordOutboundMessage(message.from, turn.reply, turn.state.seed?.providerId);
   } catch (error) {
     // El detalle crudo se queda en el log del servidor. Al proveedor no se le cuenta qué falló ni
     // con qué tecnología: solo que hubo un problema y que habrá una persona.
@@ -218,5 +219,5 @@ async function handleSimulation(message: InboundMessage, providerId: string) {
   await markAsRead(message.messageId).catch(() => {});
   await sendText(message.from, start.opening, { exact: true });
   await saveState(message.from, start.state);
-  await recordOutboundMessage(message.from, start.opening);
+  await recordOutboundMessage(message.from, start.opening, start.seed.providerId);
 }

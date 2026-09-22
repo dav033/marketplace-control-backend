@@ -117,7 +117,7 @@ export async function startOutreach(
     whatsapp: status,
     ...(redirect ? { testRedirect: { realPhone: realTo } } : {}),
   });
-  await recordOutboundMessage(to, transcript);
+  await recordOutboundMessage(to, transcript, seed.providerId);
   await setProviderWhatsappStatus(seed.providerId, status, { sent: true, channel: 'whatsapp', handle: to, test: Boolean(redirect) })
     .catch((error) => console.error('no se pudo guardar el estado de WhatsApp', seed.providerId, error instanceof Error ? error.message : error));
 
