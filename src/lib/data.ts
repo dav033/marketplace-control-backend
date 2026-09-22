@@ -286,3 +286,63 @@ export async function setProviderWhatsappStatus(
     ],
   );
 }
+
+export type ProviderConversation = {
+  waId: string | null;
+  status: WhatsappStatus | null;
+  statusAt: string | null;
+  statusReason: string | null;
+  /** La conversación salió de una simulación del panel o del modo prueba. */
+  esPrueba: boolean;
+  messages: Array<{ direction: 'in' | 'out'; body: string; at: string }>;
+};
+
+/**
+ * Lo que se habló con un proveedor por WhatsApp, en orden.
+ *
+ * El hilo se guarda por número (`whatsapp_messages`), y la conversación es quien lo ata al
+ * proveedor. Devuelve `null` solo si el proveedor no existe: sin conversación, la lista va vacía y
+ * la ficha lo dice.
+ */
+export async function getProviderConversation(providerId: string): Promise<ProviderConversation | null> {
+  if (!pool || !UUID_PATTERN.test(providerId)) return null;
+
+  const provider = await query<{
+    whatsapp_status: WhatsappStatus | null; whatsapp_status_at: string | null; whatsapp_status_reason: string | null;
+  }>(`
+    SELECT whatsapp_status, to_char(whatsapp_status_at, 'DD Mon, HH24:MI') AS whatsapp_status_at, whatsapp_status_reason
+    FROM marketplace.providers WHERE provider_id = $1
+  `, [providerId]);
+  if (!provider.rowCount) return null;
+
+  const conversation = await query<{ wa_id: string; es_prueba: boolean }>(`
+    SELECT wa_id, COALESCE((state ? 'simulation') OR (state ? 'testRedirect'), false) AS es_prueba
+    FROM marketplace.whatsapp_conversations
+    WHERE provider_id = $1
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `, [providerId]);
+
+  const row = provider.rows[0];
+  const base = {
+    status: row.whatsapp_status,
+    statusAt: row.whatsapp_status_at,
+    statusReason: row.whatsapp_status_reason,
+  };
+  if (!conversation.rowCount) return { ...base, waId: null, esPrueba: false, messages: [] };
+
+  const messages = await query<{ direction: 'in' | 'out'; body: string | null; at: string }>(`
+    SELECT direction, body, to_char(occurred_at, 'DD Mon, HH24:MI') AS at
+    FROM marketplace.whatsapp_messages
+    WHERE wa_id = $1
+    ORDER BY occurred_at
+    LIMIT 200
+  `, [conversation.rows[0].wa_id]);
+
+  return {
+    ...base,
+    waId: conversation.rows[0].wa_id,
+    esPrueba: conversation.rows[0].es_prueba,
+    messages: messages.rows.filter((message) => message.body).map((message) => ({ ...message, body: message.body! })),
+  };
+}
