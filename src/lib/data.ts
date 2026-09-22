@@ -3,6 +3,7 @@ import { query, pool } from './db';
 import type { DashboardData, Provider, ProviderSource, Registration } from './types';
 import type { Preregistered } from './contract';
 import type { WhatsappStatus } from './conversation-status';
+import { OFFICIAL_CATEGORIES } from './registration-fields';
 
 export async function getDashboard(): Promise<DashboardData> {
   if (!pool) return demoDashboard();
@@ -345,4 +346,48 @@ export async function getProviderConversation(providerId: string): Promise<Provi
     esPrueba: conversation.rows[0].es_prueba,
     messages: messages.rows.filter((message) => message.body).map((message) => ({ ...message, body: message.body! })),
   };
+}
+
+/**
+ * Cambia las categorías de un proveedor desde el panel.
+ *
+ * La principal define el ID de curaduría, el dedupe y el umbral de reputación, así que se puede
+ * cambiar pero nunca queda vacía, y el total no pasa de cinco como en el formulario. Solo entran
+ * categorías oficiales: una etiqueta libre rompería los cruces con el resto del sistema.
+ */
+export async function setProviderCategories(
+  providerId: string,
+  input: { category?: string; additionalCategories?: string[] },
+): Promise<{ category: string; additional_categories: string[] } | null | 'INVALID'> {
+  if (!pool || !UUID_PATTERN.test(providerId)) return null;
+
+  const actual = await query<{ category: string; additional_categories: string[] | null }>(
+    'SELECT category, additional_categories FROM marketplace.providers WHERE provider_id = $1',
+    [providerId],
+  );
+  if (!actual.rowCount) return null;
+
+  const principal = input.category?.trim() || actual.rows[0].category;
+  if (!OFFICIAL_CATEGORIES.has(principal)) return 'INVALID';
+
+  const adicionales = [...new Set(input.additionalCategories ?? actual.rows[0].additional_categories ?? [])]
+    .map((category) => category.trim())
+    .filter((category) => category && category !== principal);
+  if (adicionales.some((category) => !OFFICIAL_CATEGORIES.has(category)) || adicionales.length > 4) return 'INVALID';
+
+  const updated = await query<{ category: string; additional_categories: string[] }>(
+    `UPDATE marketplace.providers SET category = $2, additional_categories = $3::text[], updated_at = now()
+     WHERE provider_id = $1 RETURNING category, additional_categories`,
+    [providerId, principal, adicionales],
+  );
+  await query(
+    `INSERT INTO marketplace.audit_log (actor_id, action, entity_type, entity_id, before_state, after_state)
+     VALUES ('panel', 'provider.categories_changed', 'provider', $1, $2::jsonb, $3::jsonb)`,
+    [
+      providerId,
+      JSON.stringify({ category: actual.rows[0].category, additional_categories: actual.rows[0].additional_categories ?? [] }),
+      JSON.stringify(updated.rows[0]),
+    ],
+  );
+  return updated.rows[0];
 }

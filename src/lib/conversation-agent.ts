@@ -69,6 +69,19 @@ const MAX_REPLY_LENGTH = 1200;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 /**
+ * Erratas de dominio que el formato no detecta.
+ *
+ * Pasó de verdad: un registro quedó con "gnail.com" y nadie se dio cuenta hasta leer la ficha. Como
+ * el correo es la vía por la que el equipo le escribe después, vale más repreguntar una vez que
+ * guardar una dirección que no existe. El valor es el dominio correcto, para poder sugerirlo.
+ */
+const TYPO_DOMAINS: Record<string, string> = {
+  'gnail.com': 'gmail.com', 'gmial.com': 'gmail.com', 'gmaill.com': 'gmail.com', 'gmail.co': 'gmail.com',
+  'gamil.com': 'gmail.com', 'gmai.com': 'gmail.com', 'hotnail.com': 'hotmail.com', 'hotmal.com': 'hotmail.com',
+  'hotmai.com': 'hotmail.com', 'homail.com': 'hotmail.com', 'outlok.com': 'outlook.com', 'yaho.com': 'yahoo.com',
+};
+
+/**
  * Qué vale la pena conocer de cada tipo de proveedor, y qué servicios suelen ofrecer alrededor de
  * lo que venden. No es un cuestionario: es lo que sabría preguntar alguien del equipo que conoce el
  * sector. Los servicios sirven de ejemplos al preguntar ("¿haces entregas a domicilio, paquetes para
@@ -252,8 +265,11 @@ export function applyNotes(draft: RegistrationDraft, args: Record<string, unknow
 
   if (args.email !== undefined) {
     const value = text(args.email, 320)?.toLowerCase();
+    const dominio = value?.split('@')[1] ?? '';
     if (!value || !EMAIL_PATTERN.test(value)) reject('email', args.email, 'el correo no tiene un formato válido');
-    else { next.email = value; saved.push('email'); }
+    else if (TYPO_DOMAINS[dominio]) {
+      reject('email', value, `parece una errata: ¿quiso decir @${TYPO_DOMAINS[dominio]}? Pregúntaselo y anota el que confirme`);
+    } else { next.email = value; saved.push('email'); }
   }
 
   if (args.phone !== undefined) {

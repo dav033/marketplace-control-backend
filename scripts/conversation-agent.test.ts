@@ -68,6 +68,12 @@ const profile: ProviderProfile = {
   assert.equal(draft.phone, undefined);
   assert.deepEqual(rejected.map((item) => item.field).sort(), ['email', 'phone']);
 
+  // Una errata de dominio pasa el formato pero no existe: mejor repreguntar que guardarla.
+  const errata = applyNotes({}, { email: 'david@gnail.com' });
+  assert.equal(errata.draft.email, undefined);
+  assert.match(errata.rejected[0].reason, /@gmail\.com/, 'se sugiere el dominio correcto');
+  assert.equal(applyNotes({}, { email: 'david@gmail.com' }).draft.email, 'david@gmail.com');
+
   // "Unos 50" es una respuesta perfectamente válida: se guarda como 50 a 50.
   assert.deepEqual(applyNotes({}, { volume_min: 50, volume_max: 50 }).draft, { volume_min: 50, volume_max: 50 });
   assert.deepEqual(applyNotes({}, { volume_max: 80 }).draft, { volume_min: 80, volume_max: 80 });
