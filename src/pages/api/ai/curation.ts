@@ -69,7 +69,9 @@ export const POST: APIRoute = async ({ request }) => {
   if (!city.trim() || !category.trim()) return json({ ok: false, error: 'Ciudad y categoría son obligatorias.' }, 400);
 
   const runningJob = getRunningCurationJob(city, category);
-  if (runningJob) return json({ ...jobPayload(runningJob), reused: true }, 202);
+  // 200 y no 202: el proxy de Vercel entrega los 202 SIN cuerpo, y el panel se quedaba sin el job
+  // ("Failed to fetch") aunque la búsqueda ya estuviera corriendo en el servidor.
+  if (runningJob) return json({ ...jobPayload(runningJob), reused: true });
 
   const job = createCurationJob({ city: city.trim(), category: category.trim(), targetCount });
   void (async () => {
@@ -92,5 +94,5 @@ export const POST: APIRoute = async ({ request }) => {
       failCurationJob(job.jobId, error instanceof Error ? error.message : 'La búsqueda terminó por un error inesperado del agente.');
     }
   })();
-  return json(jobPayload(job), 202);
+  return json(jobPayload(job));
 };

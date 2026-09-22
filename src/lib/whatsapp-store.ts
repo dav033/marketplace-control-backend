@@ -123,7 +123,7 @@ export async function saveState(waId: string, state: ConversationState): Promise
  * Meta reintenta el webhook cuando no recibe un 200 a tiempo, así que el mismo mensaje llega varias
  * veces. El `INSERT` con clave primaria es el que decide: si no inserta, ya lo habíamos visto.
  */
-export async function isDuplicate(messageId: string, waId: string, body: string): Promise<boolean> {
+export async function isDuplicate(messageId: string, waId: string, body: string, providerId?: string | null): Promise<boolean> {
   if (!pool) {
     if (fallback().messages.has(messageId)) return true;
     fallback().messages.add(messageId);
@@ -139,7 +139,7 @@ export async function isDuplicate(messageId: string, waId: string, body: string)
   return result.rows.length === 0;
 }
 
-export async function recordOutboundMessage(waId: string, body: string): Promise<void> {
+export async function recordOutboundMessage(waId: string, body: string, providerId?: string | null): Promise<void> {
   if (!pool) return;
   await query(
     `INSERT INTO marketplace.whatsapp_messages (message_id, wa_id, direction, body)

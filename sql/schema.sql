@@ -312,6 +312,11 @@ END $$;
 CREATE INDEX IF NOT EXISTS ix_providers_whatsapp_status ON marketplace.providers (whatsapp_status);
 CREATE INDEX IF NOT EXISTS ix_providers_whatsapp_sent ON marketplace.providers (whatsapp_sent_at) WHERE whatsapp_sent_at IS NOT NULL;
 
+-- De qué proveedor era cada mensaje. En modo prueba todas las invitaciones llegan al mismo teléfono
+-- y comparten conversación, así que el número ya no basta para reconstruir el hilo de cada ficha.
+ALTER TABLE marketplace.whatsapp_messages ADD COLUMN IF NOT EXISTS provider_id uuid REFERENCES marketplace.providers(provider_id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS ix_whatsapp_messages_provider ON marketplace.whatsapp_messages (provider_id, occurred_at);
+
 -- Ciudades del marketplace. Una ciudad "cerrada" es una en la que todavía no operamos; al abrirla se
 -- anuncia a sus proveedores que ya pueden registrarse (ver src/lib/cities.ts). El anuncio no sale por
 -- abrir la ciudad: sale cuando alguien lo confirma desde el panel.
