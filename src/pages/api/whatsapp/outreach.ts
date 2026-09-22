@@ -1,30 +1,44 @@
 import type { APIRoute } from 'astro';
-import { getContactableCandidates } from '../../../lib/data';
-import { dailyLimit, startOutreachBatch } from '../../../lib/whatsapp-outreach';
+import { getOutreachSeeds } from '../../../lib/data';
+import { dailyLimit, startOutreachBatch, type BatchOutreachResult } from '../../../lib/whatsapp-outreach';
 import { countOutreachToday } from '../../../lib/whatsapp-store';
-import type { SeedProvider } from '../../../lib/registration-chat';
+import { isWhatsappConfigured, redirectTarget, testNumbers } from '../../../lib/whatsapp';
+
+const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
 
 /**
- * Dispara el contacto saliente por WhatsApp.
+ * Dispara el contacto saliente por WhatsApp, uno o en lote desde la tabla de proveedores.
  *
- * Va detrás del Basic Auth del panel (no está en las rutas públicas del middleware) y exige
- * `confirm: true`, igual que el envío de campañas por correo: esto manda mensajes reales a
- * proveedores reales y no puede salir por un clic accidental ni por una petición perdida.
+ * Va detrás del Basic Auth del panel: el middleware solo deja pública la ruta exacta del webhook,
+ * no todo `/api/whatsapp`. Exige `confirm: true`, igual que el envío de campañas por correo: esto
+ * manda mensajes reales y no puede salir por un clic accidental ni por una petición perdida.
  */
 
+/** Más de esto por llamada es otra cosa que un envío desde el panel; el panel manda tandas de 50. */
+const MAX_PER_REQUEST = 50;
+
 function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 }
 
-/** Cuántos quedan hoy, para que el panel lo enseñe antes de disparar nada. */
+/** Lo que el panel enseña antes de disparar nada: cupo, si se puede enviar y si está en modo prueba. */
 export const GET: APIRoute = async () => {
   const limite = dailyLimit();
   const enviados = await countOutreachToday();
-  return json({ ok: true, limite, enviados, disponibles: Math.max(0, limite - enviados) });
+  return json({
+    ok: true,
+    limite,
+    enviados,
+    disponibles: Math.max(0, limite - enviados),
+    configurado: isWhatsappConfigured(),
+    plantilla: env('WHATSAPP_OUTREACH_TEMPLATE') || null,
+    redirigidoA: redirectTarget(),
+    numerosPrueba: testNumbers(),
+  });
 };
 
 export const POST: APIRoute = async ({ request }) => {
-  let payload: { providerIds?: unknown; confirm?: unknown };
+  let payload: { providerIds?: unknown; confirm?: unknown; testNumber?: unknown };
   try {
     payload = await request.json() as typeof payload;
   } catch {
@@ -34,27 +48,36 @@ export const POST: APIRoute = async ({ request }) => {
   if (payload.confirm !== true) return json({ ok: false, error: 'CONFIRMATION_REQUIRED' }, 400);
 
   const ids = Array.isArray(payload.providerIds)
-    ? payload.providerIds.filter((id): id is string => typeof id === 'string')
+    ? [...new Set(payload.providerIds.filter((id): id is string => typeof id === 'string'))]
     : [];
   if (!ids.length) return json({ ok: false, error: 'PROVIDERS_REQUIRED' }, 400);
+  if (ids.length > MAX_PER_REQUEST) return json({ ok: false, error: 'TOO_MANY_PROVIDERS' }, 400);
+
+  // El número de prueba solo puede ser uno de la lista del servidor: el panel elige entre ellos,
+  // nunca manda a un número cualquiera.
+  const testNumber = typeof payload.testNumber === 'string' ? payload.testNumber.replace(/\D/g, '') : undefined;
+  if (testNumber && !testNumbers().includes(testNumber)) return json({ ok: false, error: 'INVALID_TEST_NUMBER' }, 400);
 
   // Los datos del candidato salen de la base, no del navegador: quien llama elige A QUIÉN se
   // escribe, nunca QUÉ se le escribe ni con qué teléfono.
-  const candidatos = await getContactableCandidates(200);
-  const elegidos: SeedProvider[] = candidatos
-    .filter((fila) => ids.includes(fila.provider_id))
-    .map((fila) => ({
-      providerId: fila.provider_id,
-      displayName: fila.display_name,
-      city: fila.city,
-      category: fila.category,
-      additionalCategories: fila.additional_categories ?? [],
-      phone: fila.phone,
-      email: fila.contact_email,
-    }));
+  const filas = await getOutreachSeeds(ids);
+  const encontrados = new Set(filas.map((fila) => fila.provider_id));
 
-  if (!elegidos.length) return json({ ok: false, error: 'NO_CANDIDATES_MATCHED' }, 404);
+  const resultado: BatchOutreachResult = await startOutreachBatch(filas.map((fila) => ({
+    providerId: fila.provider_id,
+    displayName: fila.display_name,
+    city: fila.city,
+    category: fila.category,
+    additionalCategories: fila.additional_categories ?? [],
+    phone: fila.phone,
+    email: fila.contact_email,
+    whatsappStatus: fila.whatsapp_status,
+  })), { testNumber });
 
-  const resultado = await startOutreachBatch(elegidos);
-  return json({ ok: true, ...resultado }, 201);
+  // Los ids que no existen se devuelven igual, para que el panel pueda decir cuáles fallaron.
+  const noEncontrados = ids
+    .filter((id) => !encontrados.has(id))
+    .map((id) => ({ providerId: id, displayName: '', outcome: { ok: false as const, reason: 'NOT_FOUND' as const } }));
+
+  return json({ ok: true, sent: resultado.sent, results: [...resultado.results, ...noEncontrados] }, 201);
 };

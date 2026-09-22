@@ -101,6 +101,24 @@ números separados por comas; `off` lo desactiva. La ficha que resulte se guarda
 `consent_source = 'whatsapp-simulacion'` y no cambia el estado del proveedor real; decir "no me
 interesa" en una simulación no bloquea el número.
 
+### Contacto saliente y estados
+
+Desde la tabla de proveedores se eligen uno, varios, los visibles o los primeros 10 y se les manda
+la plantilla aprobada (`WHATSAPP_OUTREACH_TEMPLATE`, hoy `invitacion_happia_2`) por
+`POST /api/whatsapp/outreach` (tandas de 50, cupo diario `WHATSAPP_DAILY_OUTREACH_LIMIT`, detrás del
+Basic Auth del panel). Cada proveedor guarda en `providers.whatsapp_status` en qué punto está:
+
+`mensaje_enviado` → `conversacion_iniciada` (contestó) → `conversacion_aceptada` (mostró interés) →
+`inscrito`; o `conversacion_rechazada` (dijo que no antes de aceptar conversar) y `rechazado` (aceptó
+conversar pero no la inscripción, o comportamiento inadecuado). Lo clasifica el agente con sus
+herramientas y las transiciones las decide `src/lib/conversation-status.ts`; cada cambio queda en
+`audit_log` (`whatsapp.status_changed`).
+
+**Modo prueba:** con `WHATSAPP_REDIRECT_ALL_TO`, todo mensaje que sale va a ese número. Los estados
+se guardan igual (es lo que se prueba) y quedan marcados `test: true` en `audit_log`; las fichas que
+salgan se guardan como prueba y no inscriben al proveedor. Antes de escribir a proveedores reales:
+quitar la variable y limpiar los estados de prueba.
+
 ## Envío de campañas (Omnisend)
 
 El envío real de campañas (`/api/campaigns`, `sendCampaign` en `src/lib/campaigns.ts`) y la prueba QA

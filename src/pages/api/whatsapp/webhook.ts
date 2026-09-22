@@ -6,6 +6,28 @@ import { isOptOut } from '../../../lib/registration-chat';
 import { SERVICE_WINDOW_MS } from '../../../lib/whatsapp-session';
 import { parseSimulationTrigger } from '../../../lib/contract';
 import { startSimulation } from '../../../lib/whatsapp-simulation';
+import { setProviderWhatsappStatus } from '../../../lib/data';
+import { nextStatus, type StatusChange } from '../../../lib/conversation-status';
+import type { ConversationState } from '../../../lib/conversation-runner';
+
+/**
+ * Guarda en el proveedor el estado de contacto si cambió. Solo en conversaciones reales: una
+ * simulación del panel no dice nada del proveedor de verdad. El modo prueba sí se guarda (es lo que
+ * se está probando), marcado como prueba en la auditoría.
+ */
+async function persistStatus(before: StatusChange | undefined, state: ConversationState, handle: string) {
+  const after = state.whatsapp;
+  const providerId = state.seed?.providerId;
+  if (!after || !providerId || state.simulation) return;
+  if (before?.status === after.status && before?.reason === after.reason) return;
+  await setProviderWhatsappStatus(providerId, after, { channel: 'whatsapp', handle, test: Boolean(state.testRedirect) })
+    .catch((error) => console.error('no se pudo guardar el estado de WhatsApp', providerId, error instanceof Error ? error.message : error));
+}
+
+/** En una prueba, quien habla es alguien del equipo: su número nunca se bloquea. */
+function isTest(state: ConversationState | undefined) {
+  return Boolean(state?.simulation || state?.testRedirect);
+}
 
 /**
  * Webhook de WhatsApp Cloud API.
@@ -87,8 +109,16 @@ async function handleMessage(message: InboundMessage) {
     // Una baja se atiende antes que nada y sin modelo de por medio: ni se procesa el registro ni se
     // le vuelve a escribir.
     if (isOptOut(message.text)) {
-      await suppress(message.from, message.text.slice(0, 200), 'whatsapp-inbound');
+      const conversacion = await getConversation(message.from);
+      if (!isTest(conversacion?.state)) await suppress(message.from, message.text.slice(0, 200), 'whatsapp-inbound');
       console.error('whatsapp: baja solicitada', { waId: message.from });
+      if (conversacion) {
+        const before = conversacion.state.whatsapp;
+        const after = nextStatus(nextStatus(before ?? { status: null, reason: null }, { type: 'inbound' }), { type: 'decline', reason: 'Pidió no ser contactado' });
+        const state = { ...conversacion.state, whatsapp: after, finished: true };
+        await saveState(message.from, state);
+        await persistStatus(before, state, message.from);
+      }
       if (isWhatsappConfigured()) {
         const despedida = 'Listo, no te volvemos a escribir. Gracias por tu tiempo.';
         await sendText(message.from, despedida).catch(() => {});
@@ -135,11 +165,12 @@ async function handleMessage(message: InboundMessage) {
       profileName: message.profileName,
     });
     await saveState(message.from, turn.state);
+    await persistStatus(estadoPrevio.whatsapp, turn.state, message.from);
 
     // Si la conversación se cierra porque no le interesa, no se le vuelve a escribir por iniciativa
-    // nuestra. Si él vuelve a escribir, el agente lo atiende. En una simulación, quien dijo que no es
-    // alguien del equipo probando: su número no se bloquea.
-    if (turn.outcome === 'declined' && !turn.state.simulation) {
+    // nuestra. Si él vuelve a escribir, el agente lo atiende. En una simulación o en modo prueba,
+    // quien dijo que no es alguien del equipo probando: su número no se bloquea.
+    if (turn.outcome === 'declined' && !isTest(turn.state)) {
       await suppress(message.from, 'rechazó el registro en la conversación', 'whatsapp-declined');
     }
 
@@ -150,7 +181,7 @@ async function handleMessage(message: InboundMessage) {
     // con qué tecnología: solo que hubo un problema y que habrá una persona.
     console.error('whatsapp reply failed', message.from, error instanceof Error ? error.message : error);
     if (isWhatsappConfigured() && !(await isSuppressed(message.from))) {
-      await sendText(message.from, 'Tuvimos un problema para responderte en este momento. Un miembro del equipo te escribe enseguida.').catch(() => {});
+      await sendText(message.from, 'Tuvimos un problema para responderte en este momento. Una persona del equipo se pondrá en contacto contigo más adelante.').catch(() => {});
     }
   }
 }

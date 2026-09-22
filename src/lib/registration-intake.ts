@@ -61,7 +61,7 @@ export async function saveConversationalRegistration(
           privacy_consent, privacy_consent_at, marketing_consent, marketing_consent_at,
           consent_source, consent_text_version, form_version, idempotency_key, form_payload)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,now(),$10,CASE WHEN $10 THEN now() ELSE NULL END,
-               $11,'chat-v2','chat-agent-v1',$12,$13)
+               $11,'chat-v3','chat-agent-v1',$12,$13)
        ON CONFLICT (idempotency_key) DO NOTHING
        RETURNING submission_id`,
       [
@@ -91,9 +91,10 @@ export async function saveConversationalRegistration(
     // El paso a `unconfirmed` solo aplica si la conversación salió de un candidato nuestro. El
     // guardia por `status = 'candidate'` evita que un registro tardío haga retroceder una ficha que
     // ya pasó por revisión humana, igual que en el formulario del correo.
-    // Una simulación no toca al proveedor real: quien respondió era alguien del equipo haciendo de él.
+    // Una simulación o una prueba desde el panel no tocan al proveedor real: quien respondió era
+    // alguien del equipo haciendo de él.
     let providerPromoted = false;
-    if (source.providerId && !source.simulationId) {
+    if (source.providerId && source.channel === 'whatsapp' && !source.simulationId) {
       const promoted = await client.query<{ provider_id: string }>(
         `UPDATE marketplace.providers SET status = 'unconfirmed', updated_at = now()
          WHERE provider_id = $1 AND status = 'candidate'

@@ -1,6 +1,7 @@
 import { CATEGORY_CODE, CURATION_HEADERS } from './curation';
 import type { HarvestedPlace, HarvestResult } from './places-harvest';
 import type { CandidateVerification } from './harvest-verify';
+import { inferAdditionalCategories } from './category-inference';
 
 /**
  * Convierte una cosecha de Google Places en filas TSV de curaduría, sin pasar por el agente.
@@ -159,7 +160,11 @@ export function harvestedPlaceToRow(
   row[16] = sanitizeCell(sourceUrl);
   row[17] = options.verificationDate ?? todayIso();
   row[18] = `Google:${rating}:${reviews}`;
-  row[19] = 'Sin dato';
+  // Categorías adicionales: la cosecha solo sabe la categoría que buscó, pero el nombre y el tipo de
+  // Google suelen delatar las demás ("Alquiler de mobiliario y menaje", "Salón de eventos y catering").
+  // Antes esta columna iba siempre en "Sin dato" y ningún proveedor cosechado tenía más de una.
+  const adicionales = inferAdditionalCategories({ name: place.name, type: place.type }, category);
+  row[19] = adicionales.length ? adicionales.join('; ') : 'Sin dato';
   return row;
 }
 

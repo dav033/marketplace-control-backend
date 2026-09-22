@@ -174,12 +174,39 @@ export async function suppress(waId: string, reason: string, source: string): Pr
  * primer día es la forma rápida de que lo bajen. Se cuenta sobre conversaciones creadas hoy, que es
  * exactamente una por número contactado.
  */
+/**
+ * Invitaciones enviadas en las últimas 24 horas, que es como mide Meta su cupo.
+ *
+ * Cuenta por proveedor (`whatsapp_sent_at`) y no por conversación: en modo prueba todas las
+ * invitaciones llegan al mismo número y comparten conversación, y el cupo tiene que seguir contando.
+ */
 export async function countOutreachToday(): Promise<number> {
   if (!pool) return 0;
   const result = await query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM marketplace.whatsapp_conversations WHERE created_at >= date_trunc('day', now())`,
+    `SELECT count(*)::int AS n FROM marketplace.providers WHERE whatsapp_sent_at >= now() - interval '24 hours'`,
   );
   return result.rows[0]?.n ?? 0;
+}
+
+/**
+ * Deja la conversación de un número lista para un contacto nuevo, aunque ya existiera.
+ *
+ * A diferencia de `saveOutreach`, reemplaza el estado: en modo prueba cada invitación llega al mismo
+ * número, y la conversación tiene que pasar a ser la del último proveedor al que se le escribió.
+ */
+export async function startConversation(waId: string, seed: SeedProvider, state: ConversationState): Promise<void> {
+  if (!pool) {
+    fallback().conversations.set(waId, { waId, providerId: seed.providerId, profileName: seed.displayName, lastInboundAtMs: null, state });
+    return;
+  }
+  await query(
+    `INSERT INTO marketplace.whatsapp_conversations (wa_id, provider_id, profile_name, last_outbound_at, state, finished)
+     VALUES ($1, $2, $3, now(), $4::jsonb, false)
+     ON CONFLICT (wa_id) DO UPDATE SET
+       provider_id = EXCLUDED.provider_id, state = EXCLUDED.state, finished = false,
+       last_outbound_at = now(), updated_at = now()`,
+    [waId, seed.providerId, seed.displayName, JSON.stringify(state)],
+  );
 }
 
 /** Conversaciones abiertas que llevan tiempo sin avanzar; candidatas a un recordatorio. */

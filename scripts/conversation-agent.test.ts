@@ -2,7 +2,7 @@
 // firma que la llamada a Gemini, y el guardado de la ficha se sustituye por funciones que anotan.
 import assert from 'node:assert/strict';
 import { applyNotes, buildSystemInstruction, converse } from '../src/lib/conversation-agent.ts';
-import { CONSENT_TEXT, readConsentReply, runTurn, stateFromProvider, type ConversationState, type TurnDeps } from '../src/lib/conversation-runner.ts';
+import { CONSENT_TEXT, readConsentReply, registrationConfirmation, runTurn, stateFromProvider, type ConversationState, type TurnDeps } from '../src/lib/conversation-runner.ts';
 import type { GeminiContent, GenerateRequest } from '../src/lib/gemini-chat.ts';
 import type { ProviderProfile } from '../src/lib/provider-profile.ts';
 
@@ -99,7 +99,9 @@ for (const duda of ['¿para qué es?', 'sí? para qué lo usan', 'no sé', 'hola
   assert.match(system, /@atalu\.eventos/);
   assert.match(system, /Catering de bodas con reseñas consistentes/, 'también por qué nos interesó');
   assert.match(system, /menús para eventos/, 'guía de Comida y Bebida');
+  assert.match(system, /entrega a domicilio, paquetes para eventos/, 'con servicios típicos para usar de ejemplo');
   assert.match(system, /estilos y temáticas/, 'y la de su categoría adicional');
+  assert.match(system, /vimos que ofreces/, 'el agente dice abiertamente lo que sabemos');
   assert.doesNotMatch(system, /Instagram null/, 'lo que no se sabe no se inventa');
 
   const sinFicha = buildSystemInstruction({ userMessage: 'hola', draft: {}, history: [], profile: null, registration: null, profileName: 'Caro' });
@@ -167,13 +169,13 @@ const source = { channel: 'chat-prueba' as const, handle: 'sesion-1' };
 
 {
   // Escribimos primero (plantilla), él contesta, el agente anota y pide la autorización.
-  let state: ConversationState = stateFromProvider(seed, 'Hola, escribimos de Marketplace Control. ¿Te interesa?');
+  let state: ConversationState = stateFromProvider(seed, 'Hola 👋 Te escribimos de Happia. ¿Te gustaría saber más?');
   const primero = deps([
-    call('anotar_datos', { full_name: 'Andrés', products: ['menú de boda'] }),
+    call('anotar_datos', { full_name: 'Andrés', email: 'andres@atalu.co', products: ['menú de boda'] }),
     call('pedir_autorizacion'),
     say('Perfecto, Andrés, ya tengo lo principal de Atalú.'),
   ]);
-  let turn = await runTurn(state, 'sí me interesa, soy Andrés y hacemos menús de boda', source, primero.turnDeps);
+  let turn = await runTurn(state, 'soy Andrés, andres@atalu.co, hacemos menús de boda', source, primero.turnDeps);
   assert.equal(turn.outcome, 'reply');
   assert.ok(turn.reply.endsWith(CONSENT_TEXT), 'el texto legal lo añade el código, siempre igual');
   assert.equal(turn.state.consent, 'pending');
@@ -182,15 +184,17 @@ const source = { channel: 'chat-prueba' as const, handle: 'sesion-1' };
   assert.equal(primero.saves.length, 0, 'nada se guarda sin autorización');
   state = turn.state;
 
-  // Responde que sí: la ficha se guarda ANTES de que conteste el agente, y el agente lo sabe.
-  const segundo = deps([say('¡Gracias, Andrés! Una persona del equipo revisa tu ficha y te contacta.')]);
+  // Responde que sí: la ficha se guarda y la confirmación la escribe el código, sin modelo.
+  const segundo = deps([]);
   turn = await runTurn(state, 'Sí, claro', source, segundo.turnDeps);
   assert.equal(turn.outcome, 'submitted');
   assert.equal(turn.state.submissionId, 'sub-1');
   assert.equal(segundo.saves.length, 1);
   assert.equal((segundo.saves[0][0] as { privacy_consent?: boolean }).privacy_consent, true);
   assert.equal((segundo.saves[0][1] as { providerId?: string }).providerId, profile.providerId, 'la ficha queda atada al candidato');
-  assert.match(String(segundo.requests[0].contents.at(-1)?.parts[0].text), /quedó guardada/, 'el agente se entera por una nota del sistema');
+  assert.equal(turn.reply, registrationConfirmation(turn.state.draft), 'un sí pelado recibe la confirmación fija');
+  assert.match(turn.reply, /^¡Listo, Andrés! Te hemos registrado en nuestro sistema\./);
+  assert.equal(segundo.requests.length, 0, 'para confirmar no hace falta el modelo');
   assert.equal(turn.state.finished, false, 'guardar no cierra la conversación: sigue el seguimiento');
   state = turn.state;
 
@@ -202,6 +206,28 @@ const source = { channel: 'chat-prueba' as const, handle: 'sesion-1' };
   assert.equal(tercero.updates[0][0], 'sub-1');
   assert.equal((tercero.updates[0][2] as { email?: string }).email, 'hola@atalu.co');
   assert.doesNotMatch(turn.reply, /Para guardar tu ficha/, 'con la ficha guardada no se vuelve a pedir autorización');
+}
+{
+  // Dice que sí y añade algo más: confirmación fija primero, y el agente atiende lo demás sin repetirla.
+  const state: ConversationState = { ...stateFromProvider(seed), consent: 'pending' };
+  const d = deps([call('anotar_datos', { notas: 'También hacen tortas de boda' }), say('¡Qué bien lo de las tortas de boda! Lo sumo a tu ficha.')]);
+  const turn = await runTurn(state, 'sí, y también hacemos tortas de boda', source, d.turnDeps);
+  assert.equal(turn.outcome, 'submitted');
+  assert.match(turn.reply, /^¡Listo! Te hemos registrado en nuestro sistema\./);
+  assert.match(turn.reply, /tortas de boda! Lo sumo/);
+  assert.match(String(d.requests[0].contents.at(-1)?.parts[0].text), /YA quedó registrada/, 'el agente sabe que no debe confirmar él');
+  assert.equal(d.updates.length, 1, 'lo que añadió se aplica a la ficha recién guardada');
+}
+{
+  // Nombre y correo se piden antes de la autorización; si no quiso darlos, el agente lo declara.
+  const sinContacto = scripted([call('pedir_autorizacion'), say('Para tu ficha, ¿me compartes tu nombre y un correo de contacto?')]);
+  const antes = await converse({ userMessage: 'eso es todo', draft: { company_name: 'Atalú' }, history: [], profile, registration: null }, sinContacto.generate);
+  assert.equal(antes.askedConsent, false);
+  assert.match(String(sinContacto.requests[1].contents.at(-1)?.parts[0].functionResponse?.response.motivo), /su nombre y un correo de contacto/);
+
+  const declarado = scripted([call('pedir_autorizacion', { contacto_pedido: true }), say('Perfecto, sin problema.')]);
+  const despues = await converse({ userMessage: 'prefiero no dar correo', draft: { company_name: 'Atalú', full_name: 'Andrés' }, history: [], profile, registration: null }, declarado.generate);
+  assert.equal(despues.askedConsent, true, 'el correo no es obligatorio: basta con haberlo pedido');
 }
 {
   // Dice que no a la autorización: no se guarda nada y el agente lo sabe.
@@ -253,6 +279,41 @@ const source = { channel: 'chat-prueba' as const, handle: 'sesion-1' };
   assert.equal(d.saves.length, 0, 'no se guarda de nuevo');
   assert.equal(turn.state.finished, false);
   assert.match(d.requests[0].systemInstruction, /lo está revisando/, 'el agente conoce el estado de la revisión');
+}
+
+// --- Estado del contacto: lo clasifica el agente, lo resuelve el código ---
+{
+  const enviado: ConversationState = { ...stateFromProvider(seed, 'Hola 👋 Te escribimos de Happia.'), whatsapp: { status: 'mensaje_enviado', reason: null } };
+
+  const hola = await runTurn(enviado, 'hola, ¿quién es?', source, deps([say('Somos Happia, un catálogo de proveedores para eventos. ¿Te cuento?')]).turnDeps);
+  assert.equal(hola.state.whatsapp?.status, 'conversacion_iniciada', 'contestar inicia la conversación');
+
+  const cuenta = await runTurn(hola.state, 'hacemos tortas sin azúcar', source, deps([call('anotar_datos', { products: ['tortas sin azúcar'] }), say('¡Qué rico!')]).turnDeps);
+  assert.equal(cuenta.state.whatsapp?.status, 'conversacion_aceptada', 'contar de su negocio es aceptar la conversación');
+
+  const interes = await runTurn(hola.state, 'sí, me interesa', source, deps([call('registrar_interes'), say('¡Genial!')]).turnDeps);
+  assert.equal(interes.state.whatsapp?.status, 'conversacion_aceptada', 'o el agente lo declara');
+
+  const noGracias = await runTurn(hola.state, 'no me interesa, gracias', source, deps([call('no_interesado', { motivo: 'no le interesa el catálogo' }), say('Entendido, gracias.')]).turnDeps);
+  assert.deepEqual(noGracias.state.whatsapp, { status: 'conversacion_rechazada', reason: 'no le interesa el catálogo' });
+
+  const seEchaAtras = await runTurn(cuenta.state, 'mejor no, no quiero estar', source, deps([call('no_interesado', { motivo: 'se echó atrás' }), say('Entendido.')]).turnDeps);
+  assert.equal(seEchaAtras.state.whatsapp?.status, 'rechazado', 'tras aceptar, negarse es rechazar la inscripción');
+
+  const sinPermiso = await runTurn({ ...cuenta.state, consent: 'pending' }, 'no', source, deps([say('Sin problema, no guardo nada.')]).turnDeps);
+  assert.deepEqual(sinPermiso.state.whatsapp, { status: 'rechazado', reason: 'No autorizó el tratamiento de sus datos' });
+
+  const inscrito = await runTurn({ ...cuenta.state, consent: 'pending' }, 'sí', source, deps([]).turnDeps);
+  assert.equal(inscrito.state.whatsapp?.status, 'inscrito', 'con la ficha guardada queda inscrito');
+
+  const grosero = await runTurn(hola.state, '(insultos)', source, deps([call('comportamiento_inadecuado', { motivo: 'insultos' }), say('Hasta luego.')]).turnDeps);
+  assert.deepEqual(grosero.state.whatsapp, { status: 'rechazado', reason: 'Comportamiento inadecuado: insultos' });
+  assert.equal(grosero.state.finished, true, 'la conversación se cierra');
+  assert.equal(grosero.outcome, 'declined');
+
+  const system = deps([say('ok')]);
+  await runTurn(noGracias.state, 'hola otra vez', source, system.turnDeps);
+  assert.match(system.requests[0].systemInstruction, /Estado de la conversación\nconversación rechazada/, 'el agente sabe que ya se había negado');
 }
 
 console.log('conversation agent tests passed');

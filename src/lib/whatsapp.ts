@@ -110,6 +110,37 @@ async function graph(path: string, body: unknown) {
 }
 
 /**
+ * Modo prueba: con `WHATSAPP_REDIRECT_ALL_TO` (uno o varios números separados por comas), ningún
+ * mensaje llega a un proveedor real: todo lo que sale va a un teléfono de prueba. Sirve para probar
+ * envíos en lote y conversaciones completas con proveedores reales sin escribirles de verdad. Se
+ * aplica aquí, en el único punto por el que sale cualquier mensaje (invitaciones y respuestas del
+ * agente), para que ningún camino se lo salte.
+ */
+export function testNumbers(): string[] {
+  return String(env('WHATSAPP_REDIRECT_ALL_TO') ?? '')
+    .split(',')
+    .map((value) => value.replace(/\D/g, ''))
+    .filter(Boolean)
+    // Un móvil colombiano sin indicativo (10 dígitos que empiezan por 3) se completa con 57.
+    .map((digits) => (digits.length === 10 && digits.startsWith('3') ? `57${digits}` : digits));
+}
+
+/** El número de prueba por defecto (el primero de la lista), o null si no hay modo prueba. */
+export function redirectTarget(): string | null {
+  return testNumbers()[0] ?? null;
+}
+
+/**
+ * A dónde sale de verdad un mensaje. Si el destino ya es un teléfono de prueba se respeta: así el
+ * agente le contesta a quien está probando desde el segundo número, en vez de al primero.
+ */
+function deliverTo(to: string) {
+  const numbers = testNumbers();
+  if (!numbers.length) return to;
+  return numbers.includes(to.replace(/\D/g, '')) ? to : numbers[0];
+}
+
+/**
  * Mensaje libre. Solo es válido dentro de la ventana de servicio de 24h; fuera de ella Meta lo
  * rechaza y hay que usar una plantilla aprobada.
  */
@@ -117,7 +148,7 @@ export function sendText(to: string, body: string) {
   return graph('/messages', {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to,
+    to: deliverTo(to),
     type: 'text',
     text: { preview_url: false, body: body.slice(0, 4096) },
   });
@@ -131,7 +162,7 @@ export function sendTemplate(to: string, templateName: string, languageCode = 'e
   return graph('/messages', {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to,
+    to: deliverTo(to),
     type: 'template',
     template: {
       name: templateName,

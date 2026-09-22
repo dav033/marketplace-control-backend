@@ -1,7 +1,9 @@
-import { isWhatsappConfigured, sendTemplate } from './whatsapp';
-import { countOutreachToday, getConversation, isSuppressed, recordOutboundMessage, saveOutreach } from './whatsapp-store';
+import { isWhatsappConfigured, sendTemplate, testNumbers } from './whatsapp';
+import { countOutreachToday, getConversation, isSuppressed, recordOutboundMessage, startConversation } from './whatsapp-store';
 import { stateFromProvider } from './conversation-runner';
+import { setProviderWhatsappStatus } from './data';
 import type { SeedProvider } from './registration-chat';
+import type { WhatsappStatus } from './conversation-status';
 
 const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
 
@@ -16,8 +18,7 @@ const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? 
  * La plantilla hay que crearla y aprobarla en el panel de Meta antes de usarla; su nombre va en
  * `WHATSAPP_OUTREACH_TEMPLATE`. El texto aprobado debe tener dos huecos, en este orden:
  *   {{1}} nombre del negocio      {{2}} ciudad
- * Por ejemplo: "Hola, escribimos de Marketplace Control. Encontramos a {{1}} en {{2}} y nos
- * gustaría sumarte a nuestro catálogo de proveedores para eventos. ¿Te interesa?"
+ * La aprobada hoy es `invitacion_happia_2`, cuyo texto reproduce `outreachTranscript`.
  */
 
 /**
@@ -30,11 +31,11 @@ const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? 
 const DEFAULT_DAILY_LIMIT = 20;
 
 export type OutreachResult =
-  | { ok: true; to: string; templateName: string }
+  | { ok: true; to: string; deliveredTo: string; templateName: string }
   | {
       ok: false;
       reason: 'WHATSAPP_NOT_CONFIGURED' | 'TEMPLATE_NOT_CONFIGURED' | 'PHONE_MISSING'
-        | 'ALREADY_CONTACTED' | 'SUPPRESSED' | 'DAILY_LIMIT_REACHED' | 'SEND_FAILED';
+        | 'ALREADY_CONTACTED' | 'SUPPRESSED' | 'DAILY_LIMIT_REACHED' | 'SEND_FAILED' | 'NOT_FOUND';
     };
 
 /** Meta espera el número sin `+`, espacios ni guiones: solo dígitos con indicativo de país. */
@@ -54,8 +55,10 @@ export function toWhatsappNumber(phone: string | null | undefined): string | und
  * proveedor va a leer, para que el hilo guardado tenga sentido al revisarlo.
  */
 export function outreachTranscript(seed: SeedProvider): string {
-  const lugar = seed.city ? ` en ${seed.city}` : '';
-  return `Hola, escribimos de Marketplace Control. Encontramos a ${seed.displayName}${lugar} y nos gustaría sumarte a nuestro catálogo de proveedores para eventos. ¿Te interesa?`;
+  // Idéntico a la plantilla aprobada `invitacion_happia_2`, con los mismos valores que envía
+  // `startOutreach` (incluido "tu ciudad" cuando no se conoce): si cambia la plantilla en Meta,
+  // este texto tiene que cambiar con ella.
+  return `Hola 👋 Te escribimos de Happia. Encontramos a ${seed.displayName.trim()} en ${seed.city ?? 'tu ciudad'} y nos encantaría sumarte a nuestro catálogo de proveedores para eventos (bodas, cumpleaños y eventos de empresa). Estar en el catálogo no tiene costo. ¿Te gustaría saber más?`;
 }
 
 export function dailyLimit(): number {
@@ -63,41 +66,64 @@ export function dailyLimit(): number {
   return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_DAILY_LIMIT;
 }
 
-export async function startOutreach(seed: SeedProvider): Promise<OutreachResult> {
+export async function startOutreach(
+  seed: SeedProvider,
+  options: { whatsappStatus?: WhatsappStatus | null; testNumber?: string } = {},
+): Promise<OutreachResult> {
   if (!isWhatsappConfigured()) return { ok: false, reason: 'WHATSAPP_NOT_CONFIGURED' };
 
   const templateName = env('WHATSAPP_OUTREACH_TEMPLATE');
   if (!templateName) return { ok: false, reason: 'TEMPLATE_NOT_CONFIGURED' };
 
-  const to = toWhatsappNumber(seed.phone);
-  if (!to) return { ok: false, reason: 'PHONE_MISSING' };
+  const realTo = toWhatsappNumber(seed.phone);
+  if (!realTo) return { ok: false, reason: 'PHONE_MISSING' };
 
-  // Quien pidió que no le escribamos manda sobre todo lo demás, incluso sobre una campaña nueva.
-  if (await isSuppressed(to)) return { ok: false, reason: 'SUPPRESSED' };
+  // No se escribe dos veces a quien ya se le escribió: insistir a quien no ha contestado es justo
+  // lo que hace que a una cuenta le bajen la calidad y acabe bloqueada.
+  if (options.whatsappStatus) return { ok: false, reason: 'ALREADY_CONTACTED' };
 
-  // No se escribe dos veces al mismo número por iniciativa nuestra: insistir a quien no ha
-  // contestado es justo lo que hace que a una cuenta le bajen la calidad y acabe bloqueada.
-  if (await getConversation(to)) return { ok: false, reason: 'ALREADY_CONTACTED' };
+  // En modo prueba el mensaje le llega a quien prueba, no al proveedor: la conversación se guarda con
+  // su número, que es desde donde contestará, y no se miran las bajas ni las conversaciones del
+  // número real, porque a ese número no se le escribe.
+  // Con varios teléfonos de prueba, quien envía elige a cuál; uno que no esté en la lista no vale.
+  const numbers = testNumbers();
+  const requested = options.testNumber?.replace(/\D/g, '');
+  const redirect = numbers.length ? (requested && numbers.includes(requested) ? requested : numbers[0]) : null;
+  const to = redirect ?? realTo;
+  if (!redirect) {
+    // Quien pidió que no le escribamos manda sobre todo lo demás, incluso sobre una campaña nueva.
+    if (await isSuppressed(realTo)) return { ok: false, reason: 'SUPPRESSED' };
+    // El mismo teléfono puede estar en dos fichas: si ya hay conversación con él, no se repite.
+    if (await getConversation(realTo)) return { ok: false, reason: 'ALREADY_CONTACTED' };
+  }
 
   if (await countOutreachToday() >= dailyLimit()) return { ok: false, reason: 'DAILY_LIMIT_REACHED' };
 
   try {
-    await sendTemplate(to, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', [
-      seed.displayName,
+    // En modo prueba se envía directo al teléfono de prueba elegido (`sendTemplate` lo respeta).
+    await sendTemplate(redirect ?? realTo, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', [
+      seed.displayName.trim(),
       seed.city ?? 'tu ciudad',
     ]);
   } catch (error) {
-    console.error('whatsapp outreach failed', to, error instanceof Error ? error.message : error);
+    console.error('whatsapp outreach failed', realTo, error instanceof Error ? error.message : error);
     return { ok: false, reason: 'SEND_FAILED' };
   }
 
   // La conversación queda preparada con los datos del candidato y con lo que le dijimos: cuando
   // conteste, el agente sabe a quién le escribió y qué le propuso.
   const transcript = outreachTranscript(seed);
-  await saveOutreach(to, seed, stateFromProvider(seed, transcript));
+  const status = { status: 'mensaje_enviado' as const, reason: redirect ? `Modo prueba: enviado a +${redirect}` : null };
+  await startConversation(to, seed, {
+    ...stateFromProvider(seed, transcript),
+    whatsapp: status,
+    ...(redirect ? { testRedirect: { realPhone: realTo } } : {}),
+  });
   await recordOutboundMessage(to, transcript);
+  await setProviderWhatsappStatus(seed.providerId, status, { sent: true, channel: 'whatsapp', handle: to, test: Boolean(redirect) })
+    .catch((error) => console.error('no se pudo guardar el estado de WhatsApp', seed.providerId, error instanceof Error ? error.message : error));
 
-  return { ok: true, to, templateName };
+  return { ok: true, to: realTo, deliveredTo: to, templateName };
 }
 
 export type BatchOutreachResult = {
@@ -111,12 +137,15 @@ export type BatchOutreachResult = {
  * Se para en cuanto el cupo se agota en vez de seguir intentando: cada rechazo por límite es una
  * llamada a Meta que no aporta nada y ensucia las métricas de la cuenta.
  */
-export async function startOutreachBatch(seeds: SeedProvider[]): Promise<BatchOutreachResult> {
+export async function startOutreachBatch(
+  seeds: Array<SeedProvider & { whatsappStatus?: WhatsappStatus | null }>,
+  options: { testNumber?: string } = {},
+): Promise<BatchOutreachResult> {
   const results: BatchOutreachResult['results'] = [];
   let sent = 0;
 
   for (const seed of seeds) {
-    const outcome = await startOutreach(seed);
+    const outcome = await startOutreach(seed, { whatsappStatus: seed.whatsappStatus, testNumber: options.testNumber });
     results.push({ providerId: seed.providerId, displayName: seed.displayName, outcome });
     if (outcome.ok) sent += 1;
     if (!outcome.ok && outcome.reason === 'DAILY_LIMIT_REACHED') break;

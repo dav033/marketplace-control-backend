@@ -288,6 +288,137 @@ ALTER TABLE marketplace.registration_submissions ADD COLUMN IF NOT EXISTS consen
 ALTER TABLE marketplace.campaigns ADD COLUMN IF NOT EXISTS body_text text NOT NULL DEFAULT '';
 ALTER TABLE marketplace.registration_submissions ALTER COLUMN email DROP NOT NULL;
 
+-- Contacto por WhatsApp: en qué punto está cada proveedor (ver src/lib/conversation-status.ts).
+-- NULL = nunca se le escribió. `whatsapp_sent_at` es cuándo salió la invitación: cuenta para el cupo
+-- diario de Meta y no cambia aunque luego cambie el estado.
+ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS whatsapp_status text;
+ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS whatsapp_status_at timestamptz;
+ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS whatsapp_status_reason text;
+ALTER TABLE marketplace.providers ADD COLUMN IF NOT EXISTS whatsapp_sent_at timestamptz;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'providers_whatsapp_status_check' AND conrelid = 'marketplace.providers'::regclass
+  ) THEN
+    ALTER TABLE marketplace.providers
+      ADD CONSTRAINT providers_whatsapp_status_check
+      CHECK (whatsapp_status IS NULL OR whatsapp_status IN (
+        'mensaje_enviado', 'conversacion_iniciada', 'conversacion_aceptada',
+        'conversacion_rechazada', 'rechazado', 'inscrito'
+      ));
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS ix_providers_whatsapp_status ON marketplace.providers (whatsapp_status);
+CREATE INDEX IF NOT EXISTS ix_providers_whatsapp_sent ON marketplace.providers (whatsapp_sent_at) WHERE whatsapp_sent_at IS NOT NULL;
+
+-- Ciudades del marketplace. Una ciudad "cerrada" es una en la que todavía no operamos; al abrirla se
+-- anuncia a sus proveedores que ya pueden registrarse (ver src/lib/cities.ts). El anuncio no sale por
+-- abrir la ciudad: sale cuando alguien lo confirma desde el panel.
+CREATE TABLE IF NOT EXISTS marketplace.cities (
+  city_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  country_code char(2) NOT NULL DEFAULT 'CO',
+  status text NOT NULL DEFAULT 'cerrada' CHECK (status IN ('cerrada', 'abierta')),
+  opened_at timestamptz,
+  announced_at timestamptz,
+  notes text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- El nombre es la clave real: la curaduría y los proveedores hablan de "Barranquilla", no de un uuid.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_cities_name ON marketplace.cities (lower(name), country_code);
+
+-- Un anuncio por ciudad y proveedor: si el envío se repite o se reintenta, nadie recibe dos veces el
+-- mismo aviso. Guarda también los fallos, que es lo que el panel enseña al terminar.
+CREATE TABLE IF NOT EXISTS marketplace.city_announcements (
+  announcement_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  city_id uuid NOT NULL REFERENCES marketplace.cities(city_id) ON DELETE CASCADE,
+  provider_id uuid NOT NULL REFERENCES marketplace.providers(provider_id) ON DELETE CASCADE,
+  channel text NOT NULL CHECK (channel IN ('whatsapp', 'email')),
+  status text NOT NULL CHECK (status IN ('sent', 'failed')),
+  detail text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (city_id, provider_id)
+);
+CREATE INDEX IF NOT EXISTS ix_city_announcements_city ON marketplace.city_announcements (city_id, status);
+
+-- Las ciudades que ya tienen proveedores existen de hecho: se crean cerradas para no anunciar nada
+-- por sorpresa. Idempotente, así que el deploy puede repetirlo.
+INSERT INTO marketplace.cities (name)
+SELECT DISTINCT trim(p.city) FROM marketplace.providers p
+WHERE trim(p.city) <> ''
+ON CONFLICT DO NOTHING;
+
+-- Las ciudades importantes del país entran cerradas: estar en la lista no anuncia nada, solo permite
+-- abrirlas cuando el marketplace llegue a cada una. Idempotente: el deploy puede repetirlo.
+INSERT INTO marketplace.cities (name) VALUES
+  ('Bogotá'),
+  ('Medellín'),
+  ('Cali'),
+  ('Barranquilla'),
+  ('Cartagena'),
+  ('Cúcuta'),
+  ('Bucaramanga'),
+  ('Pereira'),
+  ('Santa Marta'),
+  ('Ibagué'),
+  ('Manizales'),
+  ('Villavicencio'),
+  ('Pasto'),
+  ('Neiva'),
+  ('Armenia'),
+  ('Montería'),
+  ('Valledupar'),
+  ('Sincelejo'),
+  ('Popayán'),
+  ('Tunja'),
+  ('Riohacha'),
+  ('Yopal'),
+  ('Florencia'),
+  ('Quibdó'),
+  ('Arauca'),
+  ('San Andrés'),
+  ('Leticia'),
+  ('Mocoa'),
+  ('San José del Guaviare'),
+  ('Soledad'),
+  ('Malambo'),
+  ('Puerto Colombia'),
+  ('Bello'),
+  ('Envigado'),
+  ('Itagüí'),
+  ('Rionegro'),
+  ('Palmira'),
+  ('Jamundí'),
+  ('Buenaventura'),
+  ('Tuluá'),
+  ('Cartago'),
+  ('Floridablanca'),
+  ('Piedecuesta'),
+  ('Girón'),
+  ('Barrancabermeja'),
+  ('Sogamoso'),
+  ('Duitama'),
+  ('Chía'),
+  ('Zipaquirá'),
+  ('Girardot'),
+  ('Fusagasugá'),
+  ('Facatativá'),
+  ('Mosquera'),
+  ('Funza'),
+  ('Madrid'),
+  ('Apartadó'),
+  ('Magangué'),
+  ('Ciénaga'),
+  ('Maicao'),
+  ('Ocaña'),
+  ('Tumaco'),
+  ('Ipiales'),
+  ('Espinal'),
+  ('Pitalito')
+ON CONFLICT DO NOTHING;
+
 CREATE UNIQUE INDEX IF NOT EXISTS ux_contacts_email ON marketplace.contacts (lower(email));
 CREATE INDEX IF NOT EXISTS ix_providers_status_city_category ON marketplace.providers (status, city, category);
 CREATE INDEX IF NOT EXISTS ix_provider_sources_provider ON marketplace.provider_sources (provider_id);
@@ -333,6 +464,8 @@ DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'marketplace_control') THEN
     GRANT SELECT, INSERT, UPDATE ON marketplace.registration_submissions TO marketplace_control;
+    GRANT SELECT, INSERT, UPDATE ON marketplace.cities TO marketplace_control;
+    GRANT SELECT, INSERT ON marketplace.city_announcements TO marketplace_control;
     GRANT SELECT, INSERT ON marketplace.audit_log TO marketplace_control;
   END IF;
 END;

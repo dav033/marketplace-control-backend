@@ -1,13 +1,16 @@
 import type { APIRoute } from 'astro';
 import { emptyState, greeting, runTurn, stateFromProvider, type ConversationState } from '../../../lib/conversation-runner';
-import { getContactableCandidates } from '../../../lib/data';
+import { getContactableCandidates, getProvider } from '../../../lib/data';
+import { describeProfile, loadProviderProfile } from '../../../lib/provider-profile';
 import type { SeedProvider } from '../../../lib/registration-chat';
 
 /**
- * Chat de prueba local: el mismo agente de WhatsApp, sin Meta de por medio.
+ * "Test mensajes": el mismo agente de WhatsApp, dentro del panel y sin Meta de por medio.
  *
- * Solo existe en desarrollo. Es un camino que escribe fichas reales en la base saltándose el token
- * del correo, así que en producción sería una puerta abierta para crear registros sin control.
+ * Sirve para probar cómo conversa el agente con un proveedor concreto sin desplegar ni usar un
+ * teléfono. Va detrás de la autenticación del panel (no es una ruta pública del middleware). Lo que
+ * se guarde desde aquí queda con `consent_source = 'chat-prueba'` y nunca cambia el estado del
+ * proveedor real (ver `registration-intake.ts`).
  */
 
 const sessions = (globalThis as typeof globalThis & { __chatTestSessions?: Map<string, ConversationState> });
@@ -20,36 +23,22 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 }
 
-function devOnly() {
-  return import.meta.env.DEV ? null : json({ ok: false, error: 'NOT_AVAILABLE' }, 404);
-}
-
 export const GET: APIRoute = async () => {
-  const blocked = devOnly();
-  if (blocked) return blocked;
-  // La lista de candidatos viaja con el saludo: el chat deja escoger a quién se le escribe.
-  const candidates = await getContactableCandidates();
+  // La lista de candidatos para escoger con quién simular la conversación.
+  const candidates = await getContactableCandidates(500).catch(() => []);
   return json({
     ok: true,
-    greeting: greeting(),
     candidates: candidates.map((row) => ({
       providerId: row.provider_id,
       displayName: row.display_name,
       city: row.city,
       category: row.category,
-      additionalCategories: row.additional_categories ?? [],
-      phone: row.phone,
-      email: row.contact_email,
-      channel: row.contact_channel,
     })),
   });
 };
 
 export const POST: APIRoute = async ({ request }) => {
-  const blocked = devOnly();
-  if (blocked) return blocked;
-
-  let payload: { sessionId?: string; message?: string; reset?: boolean; provider?: SeedProvider };
+  let payload: { sessionId?: string; message?: string; reset?: boolean; providerId?: string };
   try {
     payload = await request.json() as typeof payload;
   } catch {
@@ -60,17 +49,47 @@ export const POST: APIRoute = async ({ request }) => {
   if (!sessionId) return json({ ok: false, error: 'SESSION_REQUIRED' }, 400);
 
   if (payload.reset) {
-    // Reiniciar con un candidato simula que le escribimos primero: el agente conoce su ficha y sabe
-    // qué le dijo la plantilla. Sin candidato, simula a alguien que nos escribe por su cuenta.
-    const opening = greeting(payload.provider);
-    const seeded = payload.provider ? stateFromProvider(payload.provider, opening) : emptyState();
+    // Con un proveedor, se simula que el sistema le escribió primero: el agente arranca con su ficha
+    // y con la misma invitación que recibiría por WhatsApp. Sin proveedor, simula a alguien que nos
+    // escribe por su cuenta. El proveedor se busca aquí, en la base: el navegador solo dice cuál.
+    let seed: SeedProvider | undefined;
+    let reputation: { rating: number | null; reviews: number | null } = { rating: null, reviews: null };
+    if (payload.providerId) {
+      const provider = await getProvider(payload.providerId);
+      if (!provider) return json({ ok: false, error: 'PROVIDER_NOT_FOUND' }, 404);
+      reputation = { rating: provider.rating === null ? null : Number(provider.rating), reviews: provider.review_count };
+      seed = {
+        providerId: provider.provider_id,
+        displayName: provider.display_name,
+        city: provider.city,
+        category: provider.category,
+        additionalCategories: provider.additional_categories ?? [],
+        phone: provider.phone,
+        email: provider.contact_email,
+      };
+    }
+
+    const opening = greeting(seed);
+    // Con proveedor, la invitación ya "salió": el estado arranca en mensaje enviado, como en WhatsApp.
+    const seeded: ConversationState = seed
+      ? { ...stateFromProvider(seed, opening), whatsapp: { status: 'mensaje_enviado', reason: null } }
+      : emptyState();
     registry().set(sessionId, seeded);
+
+    // Lo que el agente sabe del negocio, para que quien prueba vea con qué contexto conversa.
+    const profile = seed ? await loadProviderProfile(seed.providerId).catch(() => null) : null;
     return json({
       ok: true,
       reply: opening,
       outcome: 'opening',
       draft: seeded.draft,
       finished: false,
+      conversationStatus: seeded.whatsapp?.status ?? null,
+      // Para la cabecera del chat: quién es y cómo le va en público.
+      provider: seed
+        ? { providerId: seed.providerId, displayName: seed.displayName.trim(), category: seed.category, city: seed.city, ...reputation }
+        : null,
+      context: profile ? describeProfile(profile) : null,
     });
   }
 
@@ -88,5 +107,7 @@ export const POST: APIRoute = async ({ request }) => {
     draft: result.state.draft,
     finished: result.state.finished,
     submissionId: result.state.submissionId ?? null,
+    // Cómo quedaría clasificada la conversación. Aquí solo se muestra: una prueba no toca al proveedor.
+    conversationStatus: result.state.whatsapp?.status ?? null,
   });
 };

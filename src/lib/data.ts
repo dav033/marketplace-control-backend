@@ -2,6 +2,7 @@ import { demoDashboard, demoProvider } from './demo';
 import { query, pool } from './db';
 import type { DashboardData, Provider, ProviderSource, Registration } from './types';
 import type { Preregistered } from './contract';
+import type { WhatsappStatus } from './conversation-status';
 
 export async function getDashboard(): Promise<DashboardData> {
   if (!pool) return demoDashboard();
@@ -13,7 +14,8 @@ export async function getDashboard(): Promise<DashboardData> {
                p.status, p.discovery_source,
                c.email AS contact_email,
                to_char(GREATEST(p.updated_at, COALESCE(rs.created_at, p.updated_at)), 'DD Mon, HH24:MI') AS last_activity,
-               COALESCE(src.platform_count, 0) AS platform_count
+               COALESCE(src.platform_count, 0) AS platform_count,
+               p.whatsapp_status, to_char(p.whatsapp_status_at, 'DD Mon, HH24:MI') AS whatsapp_status_at, p.whatsapp_status_reason
         FROM marketplace.providers p
         LEFT JOIN LATERAL (
           SELECT email FROM marketplace.contacts WHERE provider_id = p.provider_id ORDER BY created_at DESC LIMIT 1
@@ -25,7 +27,9 @@ export async function getDashboard(): Promise<DashboardData> {
           SELECT count(*)::int AS platform_count FROM marketplace.provider_sources
           WHERE provider_id = p.provider_id AND observed_rating IS NOT NULL AND observed_reviews IS NOT NULL
         ) src ON true
-        ORDER BY p.updated_at DESC LIMIT 30
+        -- El listado de proveedores trabaja sobre el lote entero (filtros, selección para enviar en
+        -- lote): con el tope de 30 que tenía, los demás no existían para el panel.
+        ORDER BY p.updated_at DESC LIMIT 1000
       `),
       query<Registration>(`
         SELECT submission_id, provider_id, company_name, full_name, email, submission_status,
@@ -60,7 +64,8 @@ export async function getProvider(id: string) {
   if (!UUID_PATTERN.test(id)) return null;
   const result = await query<Provider>(`
     SELECT p.provider_id, p.display_name, p.category, p.additional_categories, p.city, p.rating, p.review_count, p.contact_channel, p.phone,
-           p.status, p.discovery_source, c.email AS contact_email, NULL AS last_activity
+           p.status, p.discovery_source, c.email AS contact_email, NULL AS last_activity,
+           p.whatsapp_status, to_char(p.whatsapp_status_at, 'DD Mon, HH24:MI') AS whatsapp_status_at, p.whatsapp_status_reason
     FROM marketplace.providers p
     LEFT JOIN LATERAL (
       SELECT email FROM marketplace.contacts WHERE provider_id = p.provider_id ORDER BY created_at DESC LIMIT 1
@@ -112,6 +117,56 @@ export async function deleteRegistration(id: string): Promise<boolean> {
   if (!pool || !UUID_PATTERN.test(id)) return false;
   const result = await query('DELETE FROM marketplace.registration_submissions WHERE submission_id = $1', [id]);
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Quita a un proveedor de preregistrados: borra lo que envió y lo devuelve a candidato.
+ *
+ * No borra al proveedor: su evidencia de curaduría sigue valiendo, y lo que se descarta es el
+ * registro (a menudo una prueba). Si tenía una conversación de WhatsApp que ya había guardado la
+ * ficha, se le quita esa marca para que el agente no le diga que sigue registrado. Todo en una
+ * transacción, con rastro en `audit_log`. Devuelve `false` si no estaba en preregistrados.
+ */
+export async function removePreregistration(providerId: string): Promise<boolean> {
+  if (!pool || !UUID_PATTERN.test(providerId)) return false;
+  const client = await pool.connect();
+  let began = false;
+  try {
+    await client.query('BEGIN');
+    began = true;
+    const reverted = await client.query(
+      `UPDATE marketplace.providers SET status = 'candidate', updated_at = now()
+       WHERE provider_id = $1 AND status = 'unconfirmed'
+       RETURNING provider_id`,
+      [providerId],
+    );
+    if (!reverted.rowCount) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+    const deleted = await client.query('DELETE FROM marketplace.registration_submissions WHERE provider_id = $1', [providerId]);
+    await client.query(
+      // También se retira la autorización: con ella en el borrador, el siguiente mensaje volvería a
+      // guardar la ficha sin volver a pedirla.
+      `UPDATE marketplace.whatsapp_conversations
+       SET state = jsonb_set(state - 'submissionId' - 'consent', '{draft,privacy_consent}', 'false'::jsonb, true),
+           updated_at = now()
+       WHERE provider_id = $1`,
+      [providerId],
+    );
+    await client.query(
+      `INSERT INTO marketplace.audit_log (actor_id, action, entity_type, entity_id, before_state, after_state, metadata)
+       VALUES ('panel', 'provider.preregistration_removed', 'provider', $1, '{"status":"unconfirmed"}'::jsonb, '{"status":"candidate"}'::jsonb, $2::jsonb)`,
+      [providerId, JSON.stringify({ submissions_deleted: deleted.rowCount ?? 0 })],
+    );
+    await client.query('COMMIT');
+    return true;
+  } catch (error) {
+    if (began) { try { await client.query('ROLLBACK'); } catch { /* la conexión ya no sirve */ } }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -171,4 +226,63 @@ export async function getPreregistered(): Promise<Preregistered[]> {
     LIMIT 100
   `);
   return result.rows;
+}
+
+/**
+ * Los proveedores a los que se va a escribir, buscados por id.
+ *
+ * Los datos salen de la base y no del navegador: quien llama elige A QUIÉN se escribe, nunca QUÉ se
+ * le escribe ni a qué teléfono.
+ */
+export async function getOutreachSeeds(ids: string[]) {
+  const valid = ids.filter((id) => UUID_PATTERN.test(id));
+  if (!pool || !valid.length) return [];
+  const result = await query<{
+    provider_id: string; display_name: string; city: string | null; category: string | null;
+    additional_categories: string[] | null; phone: string | null; contact_email: string | null; whatsapp_status: WhatsappStatus | null;
+  }>(`
+    SELECT p.provider_id, p.display_name, p.city, p.category, p.additional_categories, p.phone, c.email AS contact_email, p.whatsapp_status
+    FROM marketplace.providers p
+    LEFT JOIN LATERAL (
+      SELECT email FROM marketplace.contacts WHERE provider_id = p.provider_id ORDER BY created_at DESC LIMIT 1
+    ) c ON true
+    WHERE p.provider_id = ANY($1::uuid[])
+  `, [valid]);
+  // En el orden en que se pidieron: "los primeros 10" del panel tienen que ser esos 10.
+  const byId = new Map(result.rows.map((row) => [row.provider_id, row]));
+  return valid.map((id) => byId.get(id)).filter((row): row is NonNullable<typeof row> => Boolean(row));
+}
+
+/**
+ * Guarda el estado de contacto por WhatsApp de un proveedor, con rastro en `audit_log`.
+ *
+ * Solo escribe si el estado o el motivo cambian. `sent` marca además cuándo salió la invitación,
+ * que es lo que cuenta para el cupo diario.
+ */
+export async function setProviderWhatsappStatus(
+  providerId: string,
+  change: { status: WhatsappStatus | null; reason: string | null },
+  meta: { sent?: boolean; channel: string; handle?: string; test?: boolean },
+): Promise<void> {
+  if (!pool || !UUID_PATTERN.test(providerId)) return;
+  const updated = await query<{ provider_id: string }>(
+    `UPDATE marketplace.providers
+     SET whatsapp_status = $2, whatsapp_status_reason = $3, whatsapp_status_at = now(),
+         whatsapp_sent_at = CASE WHEN $4 THEN now() ELSE whatsapp_sent_at END
+     WHERE provider_id = $1
+       AND (whatsapp_status IS DISTINCT FROM $2 OR whatsapp_status_reason IS DISTINCT FROM $3 OR $4)
+     RETURNING provider_id`,
+    [providerId, change.status, change.reason, meta.sent === true],
+  );
+  if (!updated.rowCount) return;
+  await query(
+    `INSERT INTO marketplace.audit_log (actor_id, action, entity_type, entity_id, after_state, metadata)
+     VALUES ($1, 'whatsapp.status_changed', 'provider', $2, $3::jsonb, $4::jsonb)`,
+    [
+      `${meta.channel}-bot`,
+      providerId,
+      JSON.stringify({ whatsapp_status: change.status, reason: change.reason }),
+      JSON.stringify({ handle: meta.handle ?? null, test: meta.test === true }),
+    ],
+  );
 }

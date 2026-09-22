@@ -16,7 +16,21 @@ export type Provider = {
   last_activity: string | null;
   platform_count: number;
   additional_categories: string[];
+  /** En qué punto está el contacto por WhatsApp; null = nunca se le escribió. */
+  whatsapp_status?: WhatsappStatus | null;
+  /** Cuándo cambió por última vez, ya formateado ("22 Sep, 16:44"). */
+  whatsapp_status_at?: string | null;
+  whatsapp_status_reason?: string | null;
 };
+
+/** Estados del contacto por WhatsApp. Las transiciones viven en `conversation-status.ts`. */
+export type WhatsappStatus =
+  | 'mensaje_enviado'
+  | 'conversacion_iniciada'
+  | 'conversacion_aceptada'
+  | 'conversacion_rechazada'
+  | 'rechazado'
+  | 'inscrito';
 
 export type ProviderSource = {
   source_name: string;
