@@ -1,7 +1,7 @@
 // La conversación entera, sin red: el motor no llama al modelo ni a la base, así que se puede
 // recorrer paso a paso y comprobar que recoge lo mismo que el formulario web.
 import assert from 'node:assert/strict';
-import { advance, matchCategories, matchVolume, isPlainYesNo, looksLikeQuestion, nextStep, openingMessage, seedDraft, splitItems, stripLeadingYesNo, summarize, type RegistrationDraft } from '../src/lib/registration-chat.ts';
+import { advance, matchCategories, matchVolume, isOptOut, isPlainYesNo, looksLikeQuestion, nextStep, openingMessage, seedDraft, splitItems, stripLeadingYesNo, summarize, type RegistrationDraft } from '../src/lib/registration-chat.ts';
 
 // --- Interpretación de lenguaje suelto ---
 assert.deepEqual(matchCategories('hacemos comida y bebida, y también entretenimiento'), ['Comida y Bebida', 'Entretenimiento']);
@@ -220,6 +220,23 @@ for (const pelado of ['no', 'si', 'sí', 'no gracias', 'si claro', 'ninguno']) {
 }
 for (const conMotivo of ['no quiero decirtelo', 'no puedo decirte mi nombre', 'no tengo correo corporativo']) {
   assert.equal(isPlainYesNo(conMotivo), false, `"${conMotivo}" merece una respuesta, no el mensaje fijo`);
+}
+
+
+// --- Bajas: palabra completa, no subcadena ---
+// De una conversación real: "Bueno nosotros trabajamos lo que es repostería" cerró la conversación
+// porque "tra-BAJA-mos" contiene "baja". Una palabra suelta solo cuenta si es todo el mensaje.
+for (const normal of [
+  'Bueno nosotros trabajamos lo que es repostería y snacks para eventos',
+  'trabajamos con carpas y toldos',
+  'tenemos precios de temporada baja',
+  'hacemos rebajas en diciembre',
+  'no me interesa',
+]) {
+  assert.equal(isOptOut(normal), false, `no es una baja: ${normal}`);
+}
+for (const baja of ['stop', 'STOP', 'baja', 'Baja.', 'quiero darme de baja', 'no me escriban más por favor', 'déjenme en paz']) {
+  assert.equal(isOptOut(baja), true, `sí es una baja: ${baja}`);
 }
 
 console.log('registration chat refusal tests passed');

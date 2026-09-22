@@ -112,12 +112,28 @@ const OPT_OUT_PHRASES = [
   'no me escriban', 'no me escribas', 'no vuelvan a escribir', 'no vuelvas a escribir',
   'dejen de escribir', 'deja de escribirme', 'no me contacten', 'no me contactes',
   'quiero que me dejen', 'dejenme en paz', 'dejame en paz', 'borrenme', 'borrame',
-  'eliminen mi numero', 'no me interesa nada', 'stop', 'baja', 'darme de baja',
+  'eliminen mi numero', 'no me interesa nada', 'darme de baja', 'darse de baja',
 ];
 
+/**
+ * Palabras sueltas que solo valen si son TODO el mensaje.
+ *
+ * Nace de una conversación real: "Bueno nosotros trabajamos lo que es repostería" cerró la
+ * conversación, porque "tra-BAJA-mos" contiene "baja" y la comparación era por subcadena. Un
+ * proveedor que escribe "baja" a secas sí está pidiendo la baja; dentro de una frase, no.
+ */
+const OPT_OUT_WORDS = ['stop', 'baja', 'unsubscribe', 'cancelar suscripcion'];
+
+/** Palabra o frase completa: ni dentro de otra palabra, ni pegada a más letras. */
+function mentionsPhrase(text: string, phrase: string) {
+  const escapada = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escapada}(?![\\p{L}\\p{N}])`, 'u').test(text);
+}
+
 export function isOptOut(input: string): boolean {
-  const normalizado = fold(input.trim());
-  return OPT_OUT_PHRASES.some((frase) => normalizado === frase || normalizado.includes(frase));
+  const normalizado = fold(input.trim()).replace(/[\s.,;:!¡¿?]+$/, '');
+  if (OPT_OUT_WORDS.includes(normalizado)) return true;
+  return OPT_OUT_PHRASES.some((frase) => mentionsPhrase(normalizado, frase));
 }
 
 export function isPlainYesNo(input: string): boolean {
