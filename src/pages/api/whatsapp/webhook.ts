@@ -1,9 +1,11 @@
 import type { APIRoute } from 'astro';
 import { extractInboundMessages, isWhatsappConfigured, markAsRead, resolveWebhookChallenge, sendText, verifySignature } from '../../../lib/whatsapp';
 import { getConversation, isDuplicate, isSuppressed, recordOutboundMessage, saveInbound, saveState, suppress } from '../../../lib/whatsapp-store';
-import { emptyState, runTurn } from '../../../lib/conversation-runner';
-import { isOptOut } from '../../../lib/registration-chat';
+import { emptyState, runTurn, stateFromProvider } from '../../../lib/conversation-runner';
+import { isOptOut, nextStep, type SeedProvider } from '../../../lib/registration-chat';
 import { SERVICE_WINDOW_MS } from '../../../lib/whatsapp-session';
+import { extractTestRefTag } from '../../../lib/contract';
+import { getProvider } from '../../../lib/data';
 
 /**
  * Webhook de WhatsApp Cloud API.
@@ -70,7 +72,31 @@ async function handleMessages(messages: ReturnType<typeof extractInboundMessages
       }
 
       const almacenada = await getConversation(message.from);
-      const estadoPrevio = almacenada?.state ?? emptyState();
+      let estadoPrevio = almacenada?.state ?? emptyState();
+
+      // El botón "Probar WhatsApp" del panel manda el id del proveedor en el primer mensaje: si la
+      // conversación es nueva y trae esa marca, se arranca ya sabiendo de qué candidato se trata —
+      // igual que cuando escribimos nosotros primero (`stateFromProvider`) — en vez de tratar el
+      // texto del enlace ("Hola, quiero registrar Atalú...") como si fuera la respuesta del
+      // proveedor al nombre de su empresa. Solo se mira en conversaciones nuevas: una vez fijado el
+      // candidato, un reenvío del mismo enlace no debe reiniciar lo ya avanzado.
+      let refProvider: SeedProvider | null = null;
+      if (!almacenada) {
+        const refId = extractTestRefTag(message.text);
+        const provider = refId ? await getProvider(refId) : null;
+        if (provider) {
+          refProvider = {
+            providerId: provider.provider_id,
+            displayName: provider.display_name,
+            city: provider.city,
+            category: provider.category,
+            additionalCategories: provider.additional_categories ?? [],
+            phone: provider.phone,
+            email: provider.contact_email,
+          };
+          estadoPrevio = stateFromProvider(refProvider);
+        }
+      }
 
       // Guardar el entrante ANTES de contestar: abre la ventana de 24h y deja constancia aunque la
       // respuesta falle. Si se guardara después, un fallo del modelo perdería el mensaje del
@@ -91,6 +117,18 @@ async function handleMessages(messages: ReturnType<typeof extractInboundMessages
       }
 
       await markAsRead(message.messageId).catch(() => {});
+
+      // El mensaje que trajo la marca de proveedor no es una respuesta del candidato: es el gatillo
+      // que arranca la conversación ya identificada. Se contesta con la pregunta de confirmación de
+      // identidad directamente, sin pasarlo por `runTurn` — que lo leería como un "no entendí" y
+      // repreguntaría el nombre de la empresa, que ya se conoce.
+      if (refProvider) {
+        const pendiente = nextStep(estadoPrevio.draft);
+        const reply = pendiente ? pendiente.question(estadoPrevio.draft) : 'Ya tengo tus datos, ¿seguimos?';
+        await sendText(message.from, reply);
+        await recordOutboundMessage(message.from, reply);
+        continue;
+      }
 
       // El mismo motor que usa el chat de prueba local: el bot rellena el formulario de registro.
       const turn = await runTurn(estadoPrevio, message.text, { channel: 'whatsapp', handle: message.from });

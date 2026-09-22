@@ -18,6 +18,24 @@ export const SERVICE_TOKEN_HEADER = 'x-service-token';
  */
 export const HAPPIA_WHATSAPP_NUMBER = '573107346405';
 
+/**
+ * Marca que el botón "Probar WhatsApp" del panel mete en el primer mensaje para que el bot sepa de
+ * qué proveedor se trata sin adivinarlo del texto libre. Antes ese texto ("Hola, quiero registrar
+ * {nombre}") se colaba entero como respuesta a la primera pregunta del formulario si traía una coma
+ * — el saludo no lo reconocía como apertura y quedaba guardado como razón social. El frontend arma
+ * el enlace `wa.me` con esta marca, el backend la lee del primer mensaje entrante ANTES de tratarlo
+ * como respuesta del proveedor. No es un secreto: solo une un mensaje de WhatsApp con un proveedor.
+ */
+export function buildTestRefTag(providerId: string): string {
+  return `[ref:${providerId}]`;
+}
+
+const TEST_REF_TAG = /\[ref:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/i;
+
+export function extractTestRefTag(text: string): string | null {
+  return TEST_REF_TAG.exec(text)?.[1] ?? null;
+}
+
 // Las categorías que puede marcar el proveedor son las mismas 10 de la curaduría: si aquí
 // apareciera una etiqueta libre, la ficha resultante no podría cruzarse con el resto del sistema.
 export const REGISTRATION_CATEGORIES = [
