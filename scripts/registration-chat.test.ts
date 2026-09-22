@@ -87,6 +87,15 @@ for (const nombre of ['Carpas del Caribe', 'Banquetes del Norte', 'DJ Sonido Pat
   assert.equal(advance({}, nombre).draft.company_name, nombre, `"${nombre}" sí es un nombre de empresa`);
 }
 
+// Caso real (2026-09-22): un saludo seguido de texto suelto que OPENING_ONLY no reconocía porque
+// exigía que el mensaje entero encajara en un patrón cerrado. "Hola mensaje de prueba" se guardó
+// como nombre de la empresa hasta que se corrigió.
+for (const saludoConTexto of ['Hola mensaje de prueba', 'Buenas, esto es una prueba', 'Hey que tal todo']) {
+  const resultado = advance({}, saludoConTexto);
+  assert.equal(resultado.draft.company_name, undefined, `"${saludoConTexto}" no debe guardarse como empresa`);
+  assert.equal(resultado.type, 'question', `"${saludoConTexto}" debe devolver la pregunta de apertura`);
+}
+
 console.log('registration chat opening tests passed');
 
 // --- Saludo y paso de identidad ---
