@@ -1,6 +1,8 @@
 type JsonRecord = Record<string, unknown>;
 
-const env = (name: string) => import.meta.env[name as keyof ImportMetaEnv] ?? process.env[name];
+// Fuera de Astro (los tests corren en node pelado) `import.meta.env` no existe: sin el `?.` el
+// módulo reventaba al importarlo, y con él se caía cualquier prueba que tocara ciudades.
+const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
 const API_BASE = 'https://api.omnisend.com/api';
 
 export function isOmnisendConfigured() {

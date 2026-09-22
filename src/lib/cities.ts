@@ -38,7 +38,36 @@ export type City = {
 };
 
 /** Por qué un proveedor de la ciudad no recibe el anuncio. */
-export type SkipReason = 'ALREADY_ANNOUNCED' | 'ALREADY_REGISTERED' | 'REJECTED' | 'PHONE_MISSING' | 'EMAIL_MISSING' | 'EMAIL_NOT_CONSENTED';
+export type SkipReason = 'ALREADY_ANNOUNCED' | 'ALREADY_REGISTERED' | 'REJECTED' | 'PHONE_MISSING' | 'EMAIL_MISSING' | 'EMAIL_NOT_CONSENTED' | 'NO_ACEPTO';
+
+/**
+ * A quién le toca el anuncio de apertura.
+ *
+ * `aceptados` (lo normal) son los proveedores con los que ya hablamos y que aceptaron seguir: ellos
+ * saben quiénes somos y estaban esperando justo esto. `todos` es la ciudad entera, incluidos los que
+ * nunca contestaron; sirve para una ciudad nueva donde todavía no se ha hablado con nadie, pero es
+ * un mensaje en frío y hay que quererlo explícitamente.
+ */
+export type Audience = 'aceptados' | 'todos';
+
+/** Aceptar la conversación es eso: que contestara y siguiera. Quien ya dio su ficha también cuenta. */
+const ACEPTARON = new Set(['conversacion_aceptada', 'inscrito']);
+
+/**
+ * Si este proveedor recibe el anuncio y, si no, por qué. Es la regla sola, sin base de datos
+ * delante, para poder probarla: cada motivo se ve luego en la vista previa del panel.
+ */
+export function announcementDecision(row: Pick<CandidateRow, 'status' | 'whatsapp_status' | 'announced'>, audience: Audience): SkipReason | null {
+  if (row.announced) return 'ALREADY_ANNOUNCED';
+  if (row.status === 'rejected' || row.status === 'archived'
+      || row.whatsapp_status === 'rechazado' || row.whatsapp_status === 'conversacion_rechazada') return 'REJECTED';
+  // Ya está publicado en el catálogo: el anuncio lo invita a algo que ya hizo.
+  if (row.status === 'approved') return 'ALREADY_REGISTERED';
+  if (audience === 'aceptados') return ACEPTARON.has(row.whatsapp_status ?? '') ? null : 'NO_ACEPTO';
+  // Con la ciudad entera, quien ya está inscrito o dio su ficha tampoco necesita el anuncio.
+  if (row.status === 'unconfirmed' || row.whatsapp_status === 'inscrito') return 'ALREADY_REGISTERED';
+  return null;
+}
 
 type CandidateRow = {
   provider_id: string; display_name: string; city: string; category: string | null;
@@ -70,9 +99,11 @@ export async function listCities(): Promise<City[]> {
     FROM marketplace.cities c
     LEFT JOIN LATERAL (
       SELECT count(*)::int AS total,
+             -- Elegibles con la audiencia de siempre: los que ya aceptaron la conversación. Es lo
+             -- que se va a enviar si se abre la ciudad sin tocar nada, así que es lo que se enseña.
              count(*) FILTER (
-               WHERE p.status NOT IN ('unconfirmed', 'approved', 'rejected', 'archived')
-                 AND (p.whatsapp_status IS NULL OR p.whatsapp_status NOT IN ('inscrito', 'rechazado', 'conversacion_rechazada'))
+               WHERE p.status NOT IN ('approved', 'rejected', 'archived')
+                 AND p.whatsapp_status IN ('conversacion_aceptada', 'inscrito')
                  AND NOT EXISTS (SELECT 1 FROM marketplace.city_announcements ca WHERE ca.city_id = c.city_id AND ca.provider_id = p.provider_id)
              )::int AS elegibles
       FROM marketplace.providers p
@@ -117,7 +148,7 @@ export async function setCityStatus(cityId: string, status: CityStatus): Promise
  * Filtros del anuncio: se puede abrir una ciudad entera o anunciar solo a una categoría y a los que
  * lleguen a cierta reputación, para no gastar el cupo de WhatsApp con quien no interesa todavía.
  */
-export type AnnouncementFilters = { category?: string; minRating?: number; minReviews?: number };
+export type AnnouncementFilters = { category?: string; minRating?: number; minReviews?: number; audience?: Audience };
 
 /** A quién le tocaría el anuncio y por qué canal, sin enviar nada. */
 export async function announcementPlan(cityId: string, filters: AnnouncementFilters = {}): Promise<AnnouncementPlan | null> {
@@ -148,19 +179,13 @@ export async function announcementPlan(cityId: string, filters: AnnouncementFilt
     ORDER BY p.display_name
   `, [cityId, city.rows[0].name, filters.category ?? null, filters.minRating ?? null, filters.minReviews ?? null]);
 
+  const audience: Audience = filters.audience ?? 'aceptados';
   const targets: AnnouncementTarget[] = [];
   const skipped: AnnouncementPlan['skipped'] = [];
   for (const row of rows.rows) {
     const base = { providerId: row.provider_id, displayName: row.display_name.trim() };
-    if (row.announced) { skipped.push({ ...base, reason: 'ALREADY_ANNOUNCED' }); continue; }
-    if (row.status === 'unconfirmed' || row.status === 'approved' || row.whatsapp_status === 'inscrito') {
-      skipped.push({ ...base, reason: 'ALREADY_REGISTERED' });
-      continue;
-    }
-    if (row.status === 'rejected' || row.status === 'archived' || row.whatsapp_status === 'rechazado' || row.whatsapp_status === 'conversacion_rechazada') {
-      skipped.push({ ...base, reason: 'REJECTED' });
-      continue;
-    }
+    const descartado = announcementDecision(row, audience);
+    if (descartado) { skipped.push({ ...base, reason: descartado }); continue; }
 
     if (row.contact_channel === 'email') {
       // Un correo público no es permiso de marketing: esa regla es de todo el proyecto, y aquí

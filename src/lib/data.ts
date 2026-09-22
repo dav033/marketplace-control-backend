@@ -395,3 +395,89 @@ export async function setProviderCategories(
   );
   return updated.rows[0];
 }
+
+export type ConversationSummary = {
+  /** Hay ficha cuando el hilo se ató a un proveedor; si no, es un número suelto (pruebas, entrantes). */
+  providerId: string | null;
+  waId: string;
+  displayName: string;
+  city: string | null;
+  category: string | null;
+  whatsappStatus: WhatsappStatus | null;
+  esPrueba: boolean;
+  entrantes: number;
+  salientes: number;
+  ultimo: string;
+  ultimoAt: string;
+};
+
+/**
+ * Todas las conversaciones de WhatsApp que hay guardadas, la más reciente arriba.
+ *
+ * Hasta ahora el hilo solo se veía entrando a la ficha del proveedor, así que las conversaciones de
+ * números sueltos —las simulaciones y quien nos escribe sin que lo hayamos contactado— no se veían
+ * en ninguna parte. Se agrupa por proveedor cuando el mensaje lo recuerda y por número cuando no.
+ */
+export async function listConversations(limit = 100): Promise<ConversationSummary[]> {
+  if (!pool) return [];
+  const result = await query<ConversationSummary & { entrantes: string; salientes: string }>(`
+    WITH hilos AS (
+      SELECT COALESCE(m.provider_id::text, 'wa:' || m.wa_id) AS hilo,
+             m.provider_id, m.direction, m.body, m.occurred_at,
+             first_value(m.wa_id) OVER (PARTITION BY COALESCE(m.provider_id::text, 'wa:' || m.wa_id) ORDER BY m.occurred_at DESC) AS wa_id,
+             row_number() OVER (PARTITION BY COALESCE(m.provider_id::text, 'wa:' || m.wa_id) ORDER BY m.occurred_at DESC) AS reciente
+      FROM marketplace.whatsapp_messages m
+      WHERE m.body IS NOT NULL AND m.body <> ''
+    )
+    SELECT h.provider_id::text AS "providerId",
+           h.wa_id AS "waId",
+           COALESCE(p.display_name, h.wa_id) AS "displayName",
+           p.city, p.category,
+           p.whatsapp_status AS "whatsappStatus",
+           COALESCE((c.state ? 'simulation') OR (c.state ? 'testRedirect'), false) AS "esPrueba",
+           count(*) FILTER (WHERE h.direction = 'in') AS entrantes,
+           count(*) FILTER (WHERE h.direction = 'out') AS salientes,
+           max(h.body) FILTER (WHERE h.reciente = 1) AS ultimo,
+           to_char(max(h.occurred_at), 'DD Mon, HH24:MI') AS "ultimoAt",
+           max(h.occurred_at) AS orden
+    FROM hilos h
+    LEFT JOIN marketplace.providers p ON p.provider_id = h.provider_id
+    LEFT JOIN LATERAL (
+      SELECT state FROM marketplace.whatsapp_conversations wc
+      WHERE wc.wa_id = h.wa_id ORDER BY wc.updated_at DESC LIMIT 1
+    ) c ON true
+    GROUP BY h.hilo, h.provider_id, h.wa_id, p.display_name, p.city, p.category, p.whatsapp_status, c.state
+    ORDER BY orden DESC
+    LIMIT $1
+  `, [Math.max(1, Math.min(500, limit))]);
+
+  return result.rows.map((row) => ({ ...row, entrantes: Number(row.entrantes), salientes: Number(row.salientes) }));
+}
+
+/**
+ * El hilo de un número que no tiene ficha: una simulación o alguien que nos escribió por su cuenta.
+ * Para los que sí la tienen está `getProviderConversation`, que además sabe atar los mensajes viejos.
+ */
+export async function getConversationByWaId(waId: string): Promise<ProviderConversation | null> {
+  if (!pool || !/^[0-9]{6,20}$/.test(waId)) return null;
+  const messages = await query<{ direction: 'in' | 'out'; body: string | null; at: string }>(`
+    SELECT direction, body, to_char(occurred_at, 'DD Mon, HH24:MI') AS at
+    FROM marketplace.whatsapp_messages
+    WHERE wa_id = $1 AND provider_id IS NULL
+    ORDER BY occurred_at
+    LIMIT 200
+  `, [waId]);
+  const conversation = await query<{ es_prueba: boolean }>(`
+    SELECT COALESCE((state ? 'simulation') OR (state ? 'testRedirect'), false) AS es_prueba
+    FROM marketplace.whatsapp_conversations WHERE wa_id = $1 ORDER BY updated_at DESC LIMIT 1
+  `, [waId]);
+  if (!messages.rowCount) return null;
+  return {
+    status: null,
+    statusAt: null,
+    statusReason: null,
+    waId,
+    esPrueba: conversation.rows[0]?.es_prueba ?? false,
+    messages: messages.rows.filter((message) => message.body).map((message) => ({ ...message, body: message.body! })),
+  };
+}

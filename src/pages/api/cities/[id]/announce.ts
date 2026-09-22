@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { announceCity, announcementPlan, cityTemplateName } from '../../../../lib/cities';
+import { announceCity, announcementPlan, cityTemplateName, type Audience } from '../../../../lib/cities';
 import { dailyLimit } from '../../../../lib/whatsapp-outreach';
 import { countOutreachToday } from '../../../../lib/whatsapp-store';
 import { isWhatsappConfigured, normalizeTestNumber, redirectTarget, testNumbers } from '../../../../lib/whatsapp';
@@ -21,10 +21,13 @@ function readFilters(get: (name: string) => string | null | undefined) {
   const category = get('category')?.trim() || undefined;
   const rating = Number(get('minRating'));
   const reviews = Number(get('minReviews'));
+  // Sin decir nada, a los que ya aceptaron: el anuncio en frío a la ciudad entera hay que pedirlo.
+  const audience: Audience = get('audience') === 'todos' ? 'todos' : 'aceptados';
   return {
     category,
     minRating: Number.isFinite(rating) && rating > 0 ? Math.min(5, rating) : undefined,
     minReviews: Number.isFinite(reviews) && reviews > 0 ? Math.trunc(reviews) : undefined,
+    audience,
   };
 }
 
@@ -58,7 +61,7 @@ export const GET: APIRoute = async ({ params, url }) => {
 };
 
 export const POST: APIRoute = async ({ request, params }) => {
-  let payload: { confirm?: unknown; testNumber?: unknown; category?: unknown; minRating?: unknown; minReviews?: unknown };
+  let payload: { confirm?: unknown; testNumber?: unknown; category?: unknown; minRating?: unknown; minReviews?: unknown; audience?: unknown };
   try {
     payload = await request.json() as typeof payload;
   } catch {
