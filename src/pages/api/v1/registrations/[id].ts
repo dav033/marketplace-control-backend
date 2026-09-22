@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { getRegistration } from '../../../../lib/data';
+import { deleteRegistration, getRegistration } from '../../../../lib/data';
 import { assertServiceAuth, json } from '../../../../lib/api-auth';
 
 export const GET: APIRoute = async ({ request, params }) => {
@@ -8,4 +8,12 @@ export const GET: APIRoute = async ({ request, params }) => {
   const registration = await getRegistration(params.id ?? '');
   if (!registration) return json({ ok: false, error: 'REGISTRATION_NOT_FOUND' }, 404);
   return json(registration);
+};
+
+export const DELETE: APIRoute = async ({ request, params }) => {
+  const denied = assertServiceAuth(request);
+  if (denied) return denied;
+  const deleted = await deleteRegistration(params.id ?? '');
+  if (!deleted) return json({ ok: false, error: 'REGISTRATION_NOT_FOUND' }, 404);
+  return json({ ok: true });
 };

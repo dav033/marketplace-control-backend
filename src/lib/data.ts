@@ -94,6 +94,27 @@ export async function getRegistration(id: string) {
 }
 
 /**
+ * Borra un proveedor y todo lo que dependía de él.
+ *
+ * `provider_sources` (la evidencia) tiene `ON DELETE CASCADE`; `contacts`, `campaign_sends` y
+ * `registration_submissions` tienen `ON DELETE SET NULL` — el esquema ya resuelve la integridad
+ * referencial, así que un solo DELETE basta. Devuelve `true` si de verdad borró una fila, para que
+ * el endpoint pueda distinguir "ya no existía" de "se borró".
+ */
+export async function deleteProvider(id: string): Promise<boolean> {
+  if (!pool || !UUID_PATTERN.test(id)) return false;
+  const result = await query('DELETE FROM marketplace.providers WHERE provider_id = $1', [id]);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Borra una respuesta de formulario. Nada más referencia `registration_submissions` por clave foránea. */
+export async function deleteRegistration(id: string): Promise<boolean> {
+  if (!pool || !UUID_PATTERN.test(id)) return false;
+  const result = await query('DELETE FROM marketplace.registration_submissions WHERE submission_id = $1', [id]);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
  * Candidatos a los que se les puede escribir, para el chat de prueba.
  *
  * Devuelve lo que el bot necesita saber antes de abrir la conversación. Es solo lectura: elegir un

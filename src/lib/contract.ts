@@ -11,6 +11,13 @@ export type { ContactChannel, DashboardData, Provider, ProviderSource, ProviderS
 /** Cabecera con la que el frontend se identifica ante el backend. */
 export const SERVICE_TOKEN_HEADER = 'x-service-token';
 
+/**
+ * Número de WhatsApp de Happia (sin "+", como lo pide wa.me), para abrir una conversación de
+ * prueba hacia el negocio desde el panel — no es un secreto, es el mismo número público que
+ * cualquiera puede encontrar en el perfil de WhatsApp Business.
+ */
+export const HAPPIA_WHATSAPP_NUMBER = '573107346405';
+
 // Las categorías que puede marcar el proveedor son las mismas 10 de la curaduría: si aquí
 // apareciera una etiqueta libre, la ficha resultante no podría cruzarse con el resto del sistema.
 export const REGISTRATION_CATEGORIES = [
