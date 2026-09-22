@@ -1,5 +1,5 @@
 import { pool, query } from './db';
-import { isWhatsappConfigured, resolveTestTarget, sendTemplate } from './whatsapp';
+import { fillTemplate, getTemplateInfo, isWhatsappConfigured, resolveTestTarget, sendTemplate } from './whatsapp';
 import { countOutreachToday, isSuppressed, recordOutboundMessage, startConversation } from './whatsapp-store';
 import { dailyLimit, toWhatsappNumber } from './whatsapp-outreach';
 import { stateFromProvider } from './conversation-runner';
@@ -183,8 +183,15 @@ export function cityTemplateName(): string | null {
   return env('WHATSAPP_CITY_TEMPLATE') || 'ciudad_disponible';
 }
 
-/** El texto que refleja la plantilla aprobada, para el historial de la conversación. */
-export function announcementTranscript(displayName: string, city: string): string {
+/**
+ * El texto que refleja la plantilla aprobada, para el historial de la conversación.
+ *
+ * Si se puede leer la plantilla en Meta, se usa la suya con los huecos rellenos: así el hilo guardado
+ * dice exactamente lo que recibió el proveedor, aunque se cambie de plantilla desde el servidor.
+ */
+export function announcementTranscript(displayName: string, city: string, template?: { body: string; variables: number } | null): string {
+  if (template) return `${fillTemplate(template.body, [displayName, city].slice(0, template.variables))}
+${REGISTER_URL}`;
   return `¡Buenas noticias, ${displayName}! 🎉 Happia ya está disponible en ${city}. Somos el catálogo donde quienes organizan bodas, cumpleaños y eventos de empresa buscan proveedores como tú. Registrarte no tiene costo y toma pocos minutos: ${REGISTER_URL}`;
 }
 
@@ -212,6 +219,9 @@ export async function announceCity(
   // --- WhatsApp: una plantilla por proveedor, respetando cupo, bajas y modo prueba ---
   const redirect = resolveTestTarget(options.testNumber);
   const templateName = cityTemplateName();
+  // Cuántos huecos espera la plantilla configurada: la de apertura genérica no lleva ninguno, y
+  // mandarle parámetros de más hace que Meta rechace el envío.
+  const templateInfo = templateName ? await getTemplateInfo(templateName) : null;
   let enviadosHoy = await countOutreachToday();
 
   for (const target of whatsappTargets) {
@@ -221,9 +231,10 @@ export async function announceCity(
     if (!redirect && await isSuppressed(target.phone!)) { fail('SUPPRESSED'); continue; }
     if (enviadosHoy >= dailyLimit()) { fail('DAILY_LIMIT_REACHED'); continue; }
 
-    const transcript = announcementTranscript(target.displayName, plan.city.name);
+    const transcript = announcementTranscript(target.displayName, plan.city.name, templateInfo);
+    const parametros = [target.displayName, plan.city.name].slice(0, templateInfo?.variables ?? 2);
     try {
-      await sendTemplate(redirect ?? target.phone!, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', [target.displayName, plan.city.name], { exact: Boolean(redirect) });
+      await sendTemplate(redirect ?? target.phone!, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', parametros, { exact: Boolean(redirect) });
     } catch (error) {
       console.error('anuncio de ciudad falló', target.providerId, error instanceof Error ? error.message : error);
       await recordAnnouncement(cityId, target.providerId, 'whatsapp', 'failed', 'SEND_FAILED');

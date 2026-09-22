@@ -159,6 +159,49 @@ function deliverTo(to: string) {
   return numbers.includes(to.replace(/\D/g, '')) ? to : numbers[0];
 }
 
+
+/**
+ * La plantilla tal como está aprobada en Meta: su texto y cuántas variables espera.
+ *
+ * Se consulta en vez de darla por supuesta porque cada plantilla tiene lo suyo: la de invitación
+ * lleva dos huecos (negocio y ciudad) y la de apertura de ciudad puede no llevar ninguno. Mandar
+ * parámetros de más hace que Meta rechace el envío entero. Se guarda en memoria un rato: cambia
+ * pocas veces y no vale la pena consultarla en cada mensaje.
+ */
+type TemplateInfo = { body: string; variables: number };
+const templateCache = new Map<string, { info: TemplateInfo | null; at: number }>();
+const TEMPLATE_TTL_MS = 10 * 60 * 1000;
+
+export async function getTemplateInfo(name: string): Promise<TemplateInfo | null> {
+  const waba = env('WHATSAPP_BUSINESS_ACCOUNT_ID');
+  const token = env('WHATSAPP_ACCESS_TOKEN');
+  if (!waba || !token) return null;
+
+  const cached = templateCache.get(name);
+  if (cached && Date.now() - cached.at < TEMPLATE_TTL_MS) return cached.info;
+
+  let info: TemplateInfo | null = null;
+  try {
+    const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION()}/${waba}/message_templates`);
+    url.searchParams.set('name', name);
+    url.searchParams.set('fields', 'name,status,components');
+    const response = await fetch(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) });
+    const payload = await response.json() as { data?: Array<{ name: string; status: string; components?: Array<{ type: string; text?: string }> }> };
+    const plantilla = payload.data?.find((item) => item.name === name && item.status === 'APPROVED');
+    const body = plantilla?.components?.find((component) => component.type === 'BODY')?.text;
+    if (body) info = { body, variables: new Set([...body.matchAll(/\{\{(\d+)\}\}/g)].map((match) => match[1])).size };
+  } catch (error) {
+    console.error('no se pudo leer la plantilla', name, error instanceof Error ? error.message : error);
+  }
+  templateCache.set(name, { info, at: Date.now() });
+  return info;
+}
+
+/** El texto que verá el proveedor, con los huecos ya rellenos, para guardarlo en la conversación. */
+export function fillTemplate(body: string, parameters: string[]): string {
+  return parameters.reduce((texto, valor, indice) => texto.replaceAll(`{{${indice + 1}}}`, valor), body);
+}
+
 /**
  * Mensaje libre. Solo es válido dentro de la ventana de servicio de 24h; fuera de ella Meta lo
  * rechaza y hay que usar una plantilla aprobada.

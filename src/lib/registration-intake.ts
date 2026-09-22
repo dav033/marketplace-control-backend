@@ -1,5 +1,7 @@
 import { pool } from './db';
+import { OFFICIAL_CATEGORIES } from './registration-fields';
 import type { RegistrationDraft } from './registration-chat';
+import type { PoolClient } from 'pg';
 
 /**
  * Guarda una ficha recogida por conversación, no por el formulario web.
@@ -30,6 +32,39 @@ export type IntakeResult =
  */
 function isComplete(draft: RegistrationDraft): boolean {
   return Boolean(draft.company_name && draft.privacy_consent === true);
+}
+
+
+/**
+ * Las categorías que el propio proveedor dijo en la conversación entran en su ficha.
+ *
+ * La curaduría le puso una categoría (la de la búsqueda) y, si acaso, alguna deducida del nombre.
+ * Pero quien mejor sabe qué hace es él: si cuenta que además pone la música y la decoración, esas
+ * categorías tienen que quedar en el proveedor, no solo en el formulario que envió.
+ *
+ * La principal no se toca —define el ID, el dedupe y el umbral de reputación— y el total no pasa de
+ * 5 categorías, como el formulario web.
+ */
+async function mergeProviderCategories(client: PoolClient, providerId: string, services: string[] | undefined): Promise<string[] | null> {
+  const declaradas = (services ?? []).filter((service) => OFFICIAL_CATEGORIES.has(service));
+  if (!declaradas.length) return null;
+
+  const actual = await client.query<{ category: string; additional_categories: string[] | null }>(
+    'SELECT category, additional_categories FROM marketplace.providers WHERE provider_id = $1',
+    [providerId],
+  );
+  const fila = actual.rows[0];
+  if (!fila) return null;
+
+  const previas = fila.additional_categories ?? [];
+  const nuevas = [...new Set([...previas, ...declaradas])].filter((category) => category !== fila.category).slice(0, 4);
+  if (nuevas.length === previas.length && nuevas.every((category) => previas.includes(category))) return null;
+
+  await client.query(
+    'UPDATE marketplace.providers SET additional_categories = $2::text[], updated_at = now() WHERE provider_id = $1',
+    [providerId, nuevas],
+  );
+  return nuevas;
 }
 
 export async function saveConversationalRegistration(
@@ -104,13 +139,14 @@ export async function saveConversationalRegistration(
       );
       providerPromoted = promoted.rows.length > 0;
 
+      const categorias = await mergeProviderCategories(client, source.providerId, draft.services);
       await client.query(
         `INSERT INTO marketplace.audit_log (actor_id, action, entity_type, entity_id, after_state, metadata)
          VALUES ($1, 'provider.confirmed', 'provider', $2, $3::jsonb, $4::jsonb)`,
         [
           `${source.channel}-bot`,
           source.providerId,
-          JSON.stringify({ status: providerPromoted ? 'unconfirmed' : null }),
+          JSON.stringify({ status: providerPromoted ? 'unconfirmed' : null, ...(categorias ? { additional_categories: categorias } : {}) }),
           JSON.stringify({ submission_id: row.submission_id, channel: source.channel, handle: source.handle, status_changed: providerPromoted, test: Boolean(source.simulationId) }),
         ],
       );
