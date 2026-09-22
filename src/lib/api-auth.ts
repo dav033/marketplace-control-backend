@@ -15,6 +15,14 @@ const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? 
  * Sin `BACKEND_SERVICE_TOKEN` configurado solo se permite en desarrollo. En producción se responde
  * 503 en vez de abrir: un backend público sin token sería una filtración de la base entera.
  */
+/** ¿La petición trae el token de servicio del frontend? Lo usa también el middleware del panel. */
+export function hasValidServiceToken(request: Request): boolean {
+  const expected = env('BACKEND_SERVICE_TOKEN');
+  if (!expected) return false;
+  const provided = request.headers.get(SERVICE_TOKEN_HEADER);
+  return Boolean(provided) && timingSafeEqual(provided!, String(expected));
+}
+
 export function assertServiceAuth(request: Request): Response | null {
   const expected = env('BACKEND_SERVICE_TOKEN');
 

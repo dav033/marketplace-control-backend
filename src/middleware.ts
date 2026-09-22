@@ -1,4 +1,5 @@
 import { defineMiddleware } from 'astro:middleware';
+import { hasValidServiceToken } from './lib/api-auth';
 
 // El webhook de WhatsApp lo llama Meta, no un operador: con Basic Auth delante, la verificación
 // recibiría 401 y Meta nunca guardaría la URL. Lo que lo protege es la firma HMAC del cuerpo,
@@ -24,6 +25,11 @@ export const onRequest = defineMiddleware(({ request }, next) => {
     && (import.meta.env.LOCAL_AUTO_LOGIN ?? process.env.LOCAL_AUTO_LOGIN) === 'true';
 
   if (servicePrefixes.some((prefix) => pathname.startsWith(prefix))) return next();
+
+  // El panel llama a estas rutas a través de su propio servidor, que ya comprobó la sesión del
+  // operador y añade el token de servicio. Antes solo valía el Basic Auth, y eso obligaba al
+  // navegador a pedir usuario y contraseña aparte del login del panel.
+  if (hasValidServiceToken(request)) return next();
   if (publicPrefixes.some((prefix) => pathname.startsWith(prefix))) return next();
   if (publicExactPaths.includes(pathname.replace(/\/+$/, ''))) return next();
   if (localAutoLogin) return next();
