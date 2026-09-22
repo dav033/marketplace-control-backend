@@ -1,4 +1,5 @@
 import { isPlainYesNo, seedDraft, type RegistrationDraft, type SeedProvider } from './registration-chat';
+import { REGISTER_URL } from './registration-fields';
 import { outreachTranscript } from './whatsapp-outreach';
 import { saveConversationalRegistration, updateConversationalRegistration } from './registration-intake';
 import { converse, HISTORY_LIMIT, type AgentResult, type ChatTurn } from './conversation-agent';
@@ -46,6 +47,8 @@ export type ConversationState = {
    * lo guarda en el proveedor solo si la conversación es real (no simulación ni chat de prueba).
    */
   whatsapp?: StatusChange;
+  /** Ya se le pasó el enlace de registro (solo se manda una vez, y solo si su ciudad está abierta). */
+  registerLinkSent?: boolean;
 };
 
 export type TurnResult = {
@@ -84,6 +87,17 @@ const defaultDeps: TurnDeps = {
  * El texto legal de la autorización. Lo añade el código, nunca lo redacta el agente: tiene que ser
  * siempre el mismo para que la versión que se guarda (`consent_text_version`) diga la verdad.
  */
+/**
+ * El enlace de registro, cuando su ciudad ya está abierta.
+ *
+ * Lo añade el código y no el agente: pedírselo al modelo salía unas veces sí y otras no, y el
+ * enlace es justo lo que el proveedor necesita para quedar listo sin esperar a nadie. Va una sola
+ * vez, en cuanto muestra interés, y nunca donde todavía no hemos abierto.
+ */
+export function registerInvitation(city: string): string {
+  return `Y si quieres dejarlo listo tú mismo: Happia ya está abierto en ${city} y puedes completar tu registro en pocos minutos aquí 👉 ${REGISTER_URL}`;
+}
+
 export const CONSENT_TEXT = 'Para guardar tu ficha necesito tu autorización para tratar estos datos con el fin de evaluarte como proveedor de Happia. ¿Me la das? Responde "sí" o "no".';
 
 /**
@@ -250,9 +264,10 @@ export async function runTurn(
 
   // 3. El agente conversa.
   let result: AgentResult;
+  let profile: ProviderProfile | null = null;
   try {
     const registration = state.submissionId ? await deps.loadRegistration(state.submissionId) : null;
-    const profile = state.seed?.providerId ? await deps.loadProfile(state.seed.providerId) : null;
+    profile = state.seed?.providerId ? await deps.loadProfile(state.seed.providerId) : null;
     result = await converse({
       userMessage: input,
       draft: state.draft,
@@ -294,6 +309,15 @@ export async function runTurn(
     consent = 'pending';
   }
 
+  // Ciudad abierta e interés: el registro no tiene que esperar a la conversación. Se le pasa el
+  // enlace una sola vez, y no en el turno de la autorización para no mezclar dos peticiones.
+  let registerLinkSent = state.registerLinkSent;
+  if (profile?.cityOpen && result.interest && !result.declined && !registerLinkSent
+      && !state.submissionId && !state.consent && !result.askedConsent) {
+    reply = `${reply}\n\n${registerInvitation(profile.city)}`;
+    registerLinkSent = true;
+  }
+
   // Lo que el agente clasificó en este turno. El interés va primero: quien cuenta de su negocio y
   // luego se echa atrás pasa por "aceptada" y termina en "rechazado", no en "conversación rechazada".
   const agentEvents: StatusEvent[] = [];
@@ -305,6 +329,7 @@ export async function runTurn(
     ...state,
     draft: result.draft,
     consent,
+    registerLinkSent,
     finished: result.declined,
     history: remember(history, { role: 'user', text: input }, { role: 'model', text: reply }),
   }, agentEvents);

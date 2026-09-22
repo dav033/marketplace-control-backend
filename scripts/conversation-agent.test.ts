@@ -2,7 +2,7 @@
 // firma que la llamada a Gemini, y el guardado de la ficha se sustituye por funciones que anotan.
 import assert from 'node:assert/strict';
 import { applyNotes, buildSystemInstruction, converse } from '../src/lib/conversation-agent.ts';
-import { CONSENT_TEXT, readConsentReply, registrationConfirmation, runTurn, stateFromProvider, type ConversationState, type TurnDeps } from '../src/lib/conversation-runner.ts';
+import { CONSENT_TEXT, readConsentReply, registerInvitation, registrationConfirmation, runTurn, stateFromProvider, type ConversationState, type TurnDeps } from '../src/lib/conversation-runner.ts';
 import type { GeminiContent, GenerateRequest } from '../src/lib/gemini-chat.ts';
 import type { ProviderProfile } from '../src/lib/provider-profile.ts';
 
@@ -114,7 +114,7 @@ for (const duda of ['¿para qué es?', 'sí? para qué lo usan', 'no sé', 'hola
   assert.match(system, /estilos y temáticas/, 'y la de su categoría adicional');
   assert.match(system, /vimos que ofreces/, 'el agente dice abiertamente lo que sabemos');
   assert.match(system, /YA está abierto en Barranquilla/, 'con la ciudad abierta puede mandarlo al registro');
-  assert.match(system, /happia\.co\/register/, 'y tiene el enlace a mano');
+  assert.doesNotMatch(system, /happia\.co\/register/, 'el enlace lo pone el código, no el modelo');
   assert.doesNotMatch(system, /Instagram null/, 'lo que no se sabe no se inventa');
 
   // Con la ciudad cerrada el enlace no sirve de nada: el agente tiene que verlo en la ficha.
@@ -312,6 +312,18 @@ const source = { channel: 'chat-prueba' as const, handle: 'sesion-1' };
 
   const interes = await runTurn(hola.state, 'sí, me interesa', source, deps([call('registrar_interes'), say('¡Genial!')]).turnDeps);
   assert.equal(interes.state.whatsapp?.status, 'conversacion_aceptada', 'o el agente lo declara');
+
+  // Con la ciudad abierta, el interés se responde con el enlace: puede registrarse sin esperarnos.
+  assert.match(interes.reply, /happia\.co\/register/, 'ciudad abierta e interés: va el enlace');
+  assert.equal(interes.state.registerLinkSent, true);
+  const otraVez = await runTurn(interes.state, 'y también hacemos catering', source, deps([say('¡Genial!')]).turnDeps);
+  assert.doesNotMatch(otraVez.reply, /happia\.co\/register/, 'el enlace va una sola vez');
+
+  // Ciudad cerrada: el enlace llevaría a un registro que no le sirve todavía.
+  const cerrada = deps([call('registrar_interes'), say('¡Genial!')], { loadProfile: async () => ({ ...profile, city: 'Pereira', cityOpen: false }) });
+  const sinEnlace = await runTurn(hola.state, 'sí, me interesa', source, cerrada.turnDeps);
+  assert.doesNotMatch(sinEnlace.reply, /happia\.co\/register/, 'donde no hemos abierto, no hay enlace');
+  assert.match(registerInvitation('Chía'), /Chía/, 'el texto nombra su ciudad');
 
   const noGracias = await runTurn(hola.state, 'no me interesa, gracias', source, deps([call('no_interesado', { motivo: 'no le interesa el catálogo' }), say('Entendido, gracias.')]).turnDeps);
   assert.deepEqual(noGracias.state.whatsapp, { status: 'conversacion_rechazada', reason: 'no le interesa el catálogo' });

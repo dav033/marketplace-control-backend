@@ -1,4 +1,4 @@
-import { OFFICIAL_CATEGORIES, REGISTER_URL, parseVolume } from './registration-fields';
+import { OFFICIAL_CATEGORIES, parseVolume } from './registration-fields';
 import { findProhibited } from './prohibited-items';
 import { neutralizeAgentText } from './agent-identity';
 import { CATEGORY_LIST, MAX_PRODUCTS, MAX_SERVICES, matchCategories, splitItems, type RegistrationDraft } from './registration-chat';
@@ -148,7 +148,7 @@ Tu objetivo: conocer de verdad su negocio para que la ficha lo represente bien. 
 - Nada es obligatorio. Si algo no quiere contarlo, no insistas: sigue con otra cosa.
 - El número de asistentes es lo más difícil de contestar: acepta lo que diga. Un solo número ("unos 50") vale; "de 50 a 300" también; "depende del evento", "grandes y pequeños" o "no sabría decirte" NO son un número: anótalo en notas tal cual y pasa a otra cosa. Nunca preguntes dos veces por el rango.
 - Cosas útiles para la ficha, sin orden ni obligación: qué ofrece en concreto, los servicios que da, para cuántos asistentes suele trabajar y lo que lo haga diferente.
-- Si Happia YA está abierto en su ciudad (lo dice la ficha de abajo): en cuanto muestre interés, pásale el enlace para que complete su registro él mismo, ${REGISTER_URL}, y dile que ahí queda listo en pocos minutos. Menciónalo una sola vez; si prefiere seguir contándote por aquí, sigue la conversación y anota lo que te diga.
+- Si Happia YA está abierto en su ciudad (lo dice la ficha de abajo): puede registrarse él mismo hoy. No escribas tú ningún enlace: el sistema lo añade solo, al final de tu mensaje, en cuanto muestre interés. Tú sigue la conversación con naturalidad.
 - Si Happia todavía NO está abierto en su ciudad: no le des ningún enlace de registro. Recoge lo que quiera contarte y, si pregunta cuándo, dile que le avisamos en cuanto lleguemos a su ciudad.
 - Datos de contacto: antes de pedir la autorización, pídele en un mismo mensaje su nombre y un correo de contacto (por ejemplo: "Para tu ficha, ¿me compartes tu nombre y un correo de contacto?"). Si ya te dio uno de los dos, pide solo el que falta. Si no quiere darlos, no insistas.
 
