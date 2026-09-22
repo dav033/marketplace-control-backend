@@ -24,8 +24,11 @@ export const GET: APIRoute = async ({ request, url }) => {
       const conversation = await getConversationByWaId(waId);
       return conversation ? json({ ok: true, ...conversation }) : json({ ok: false, error: 'NOT_FOUND' }, 404);
     }
-    const limit = Number(url.searchParams.get('limit'));
-    return json({ ok: true, conversaciones: await listConversations(Number.isFinite(limit) ? limit : 100) });
+    // `Number(null)` es 0, no NaN: sin este rodeo, no mandar `limit` pedía cero conversaciones y la
+    // lista llegaba con una sola (el mínimo del propio rango).
+    const pedido = url.searchParams.get('limit');
+    const limit = pedido ? Number(pedido) : 100;
+    return json({ ok: true, conversaciones: await listConversations(Number.isFinite(limit) && limit > 0 ? limit : 100) });
   } catch (error) {
     // Sin base el panel enseña el aviso en vez de romperse: es la misma regla que en la ficha.
     console.error('no se pudieron leer las conversaciones', error instanceof Error ? error.message : error);
