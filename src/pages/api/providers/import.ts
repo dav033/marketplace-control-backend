@@ -16,6 +16,6 @@ export const POST: APIRoute = async ({ request }) => {
     return json({ ok: false, accepted: 0, rejected: 0, error: 'El cuerpo de la solicitud no es válido.' }, 400);
   }
   const raw = typeof payload === 'object' && payload !== null && typeof payload.tsv === 'string' ? payload.tsv : '';
-  const result = await importCurationTsv(raw);
+  const result = await importCurationTsv(raw, { minRating: Number(payload.minRating), minReviews: Number(payload.minReviews) });
   return json(result.body, result.status);
 };

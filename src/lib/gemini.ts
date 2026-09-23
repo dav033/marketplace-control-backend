@@ -1,12 +1,14 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { CURATION_HEADERS, isCorporateEmail, parseCurationTsv, parseMultiPlatformReputation, summarizeContactChannels, validateCurationBatch } from './curation';
+import { CURATION_HEADERS, isCorporateEmail, parseCurationTsv, parseMultiPlatformReputation, summarizeContactChannels, validateCurationBatch, type CurationThreshold } from './curation';
 import { curationCandidateKey, getCurationBlacklist, getExistingProviders, type CurationBlacklistEntry, type ExistingProvider } from './curation-history';
 import { currentCurationContext, logClaudeRun, logCurationEvent, redactCommand, type ClaudeRunContext, type ClaudeRunRole } from './curation-log';
 import { isGooglePlacesConfigured, lookupGooglePlaceReputation, toDomain, toE164Colombia } from './google-places';
 import { formatHarvestForPrompt, harvestCategoryCandidates, hasHarvestQueries, isContactable, type HarvestedPlace } from './places-harvest';
 import { harvestedPlaceToRow } from './harvest-import';
 import { scrapeProviderContact, type ScrapedContact } from './contact-scrape';
+import { verifyBatchContacts } from './contact-verify';
+import { getPlacesUsage } from './places-gate';
 
 const GEMINI_INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const MAX_CURATION_CANDIDATES = 20;
@@ -967,8 +969,8 @@ export function buildLivePreviewRows(parsed: ReturnType<typeof parseCurationTsv>
   }));
 }
 
-function buildLivePreview(tsv: string, model: string): CurationLivePreview {
-  const parsed = parseCurationTsv(tsv);
+function buildLivePreview(tsv: string, model: string, threshold?: CurationThreshold): CurationLivePreview {
+  const parsed = parseCurationTsv(tsv, threshold);
   const validation = validateCurationBatch(parsed);
   return {
     tsv,
@@ -1310,6 +1312,7 @@ async function fillMissingEmailsFromSourceUrls(tsv: string, context?: ClaudeRunC
   const CONCURRENCY = 4;
   let attempted = 0;
   let filled = 0;
+  let hinted = 0;
   const updatedRows = new Array<string>(rows.length);
   for (let start = 0; start < rows.length; start += CONCURRENCY) {
     const batch = rows.slice(start, start + CONCURRENCY);
@@ -1317,23 +1320,44 @@ async function fillMissingEmailsFromSourceUrls(tsv: string, context?: ClaudeRunC
       const cells = line.split('\t');
       const emailCell = (cells[15] ?? '').trim();
       const sourceUrl = (cells[16] ?? '').trim();
+      const missingEmail = normalizePromptKey(emailCell) === 'sin dato';
+      const missingReputation = normalizePromptKey((cells[8] ?? '').trim()) === 'sin dato' || normalizePromptKey((cells[9] ?? '').trim()) === 'sin dato';
       // Solo vale la pena leer un dominio propio del negocio: un perfil de red social no tiene
-      // /contacto que scrapear, y un agregador no es del negocio.
-      if (normalizePromptKey(emailCell) !== 'sin dato') return line;
+      // /contacto que scrapear, y un agregador no es del negocio. Se lee también cuando falta la
+      // reputación: el sitio puede declarar la suya en JSON-LD, y esa pista ahorra tiempo a quien revisa.
+      if (!missingEmail && !missingReputation) return line;
       if (!sourceUrl || normalizePromptKey(sourceUrl) === 'sin dato') return line;
       if (isSocialProfileUrl(sourceUrl) || AGGREGATOR_OR_SHORTLINK_HOSTS.test(sourceUrl)) return line;
       attempted += 1;
       const contact = await scrapeProviderContact(sourceUrl).catch((): ScrapedContact => ({}));
-      if (!contact.email) return line;
-      filled += 1;
-      cells[15] = contact.email;
-      if (contact.instagram && normalizePromptKey((cells[14] ?? '').trim()) === 'sin redes') cells[14] = contact.instagram;
-      return cells.join('\t');
+      let changed = false;
+      if (missingEmail && contact.email) {
+        filled += 1;
+        changed = true;
+        cells[15] = contact.email;
+        if (contact.instagram && normalizePromptKey((cells[14] ?? '').trim()) === 'sin redes') cells[14] = contact.instagram;
+      }
+      if (missingReputation && contact.selfDeclaredRating) {
+        hinted += 1;
+        changed = true;
+        cells[12] = appendSelfDeclaredRatingHint(cells[12] ?? '', contact.selfDeclaredRating);
+      }
+      return changed ? cells.join('\t') : line;
     }));
     for (let index = 0; index < results.length; index += 1) updatedRows[start + index] = results[index];
   }
-  if (context && attempted) logCurationEvent('email_backfill', { ...context, attempted, filled });
+  if (context && attempted) logCurationEvent('email_backfill', { ...context, attempted, filled, selfDeclaredRatingHints: hinted });
   return [header, ...updatedRows].join('\n');
+}
+
+/**
+ * La pista va SOLO a la justificación: calificación y reseñas siguen en "Sin dato" porque un dato
+ * que el negocio publica de sí mismo no es una verificación. La fila sigue en "Requiere revisión".
+ */
+export function appendSelfDeclaredRatingHint(reason: string, declared: { rating: number; reviews: number; foundAt: string }): string {
+  const base = reason.trim();
+  const hint = `Pista sin verificar: el propio sitio declara ${declared.rating.toFixed(1)} con ${declared.reviews} reseñas (${declared.foundAt}); confírmalo en la plataforma antes de aprobar.`;
+  return `${base ? `${base} ` : ''}${hint}`.slice(0, 900);
 }
 
 /**
@@ -1438,13 +1462,13 @@ export function filterByReputationThreshold(
   tsv: string,
   minRating: number,
   minReviews: number,
-): { tsv: string; removed: number; belowThreshold: number; withoutReputation: number } {
+): { tsv: string; removed: number; belowThreshold: number; keptForReview: number } {
   const lines = tsv.replace(/\r\n?/g, '\n').split('\n');
   const header = lines[0] ?? '';
   const rows = lines.slice(1).filter(line => line.trim());
   // Sin umbral efectivo no se toca el lote: filtrar seria quitar filas sin que nadie lo pidiera.
   if (minRating <= 0 && minReviews <= 0) {
-    return { tsv, removed: 0, belowThreshold: 0, withoutReputation: 0 };
+    return { tsv, removed: 0, belowThreshold: 0, keptForReview: 0 };
   }
   // La curaduria acepta reputacion repartida: si ninguna plataforma llega al minimo por si sola,
   // dos o mas que si alcancen la calificacion y sumen el doble de resenas tambien califican.
@@ -1452,7 +1476,7 @@ export function filterByReputationThreshold(
   const combinedMinPlatforms = 2;
   const combinedMinReviews = minReviews * 2;
   let belowThreshold = 0;
-  let withoutReputation = 0;
+  let keptForReview = 0;
   const kept = rows.filter(line => {
     const cells = line.split('\t');
     const rating = Number((cells[8] ?? '').trim().replace(',', '.'));
@@ -1461,7 +1485,11 @@ export function filterByReputationThreshold(
     const qualifying = platforms.filter(entry => entry.rating >= minRating);
     const combinedReviews = qualifying.reduce((sum, entry) => sum + entry.reviews, 0);
     if (qualifying.length >= combinedMinPlatforms && combinedReviews >= combinedMinReviews) return true;
-    if (!Number.isFinite(rating) || !Number.isFinite(reviews)) { withoutReputation += 1; return false; }
+    // "Sin dato" no es "no cumple": es "no se pudo verificar". Antes esta fila desaparecia en
+    // silencio (52 de 72 retiradas en el benchmark de 10 categorias); ahora se conserva y el
+    // validador la marca `pending_reputation_review`, que el panel muestra como "Requiere
+    // revision" y el importador nunca acepta. Solo cae lo que SI tiene cifra y no alcanza.
+    if (!Number.isFinite(rating) || !Number.isFinite(reviews)) { keptForReview += 1; return true; }
     if (rating < minRating || reviews < minReviews) { belowThreshold += 1; return false; }
     return true;
   });
@@ -1469,11 +1497,11 @@ export function filterByReputationThreshold(
     tsv: [header, ...kept].join('\n'),
     removed: rows.length - kept.length,
     belowThreshold,
-    withoutReputation,
+    keptForReview,
   };
 }
 
-export async function curateProviders(input: { city: string; category: string; instructions?: string; targetCount?: number; scanAttempt?: number; jobId?: string; runId?: string; minRating?: number; minReviews?: number; onPhase?: CurationPhaseReporter }): Promise<GeminiCurationResult> {
+export async function curateProviders(input: { city: string; category: string; instructions?: string; targetCount?: number; remainingCount?: number; scanAttempt?: number; jobId?: string; runId?: string; minRating?: number; minReviews?: number; onPhase?: CurationPhaseReporter }): Promise<GeminiCurationResult> {
   const configuredProvider = String(env('CURATION_PROVIDER') || 'gemini').trim().toLowerCase();
   const provider: 'gemini' | 'claude-code' | 'codex' = configuredProvider === 'claude-code'
     ? 'claude-code'
@@ -1503,6 +1531,11 @@ export async function curateProviders(input: { city: string; category: string; i
   const isBroadFoodDiscovery = normalizePromptKey(city) === 'barranquilla' && normalizePromptKey(category) === 'comida y bebida';
   const maxTurns = isBroadFoodDiscovery ? 60 : 32;
   const targetCount = Math.max(1, Math.min(100, Math.trunc(input.targetCount ?? 20)));
+  // Cuota de este escaneo: lo que falta para el objetivo, con un suelo para que el agente no se
+  // conforme con tres y un techo de 20 filas por lote. Antes pedía "entre 3 y 8" fijos y una
+  // corrida de 20 necesitaba diez escaneos aunque la ciudad diera para más en cada uno.
+  const remainingCount = Math.max(1, Math.min(targetCount, Math.trunc(input.remainingCount ?? targetCount)));
+  const perScan = Math.min(MAX_CURATION_CANDIDATES, Math.max(8, remainingCount));
   const scanAttempt = input.scanAttempt ?? 1;
   const runContext: ClaudeRunContext = currentCurationContext(
     input.jobId ? { jobId: input.jobId, scanNumber: scanAttempt, role: 'single' } : undefined,
@@ -1538,7 +1571,7 @@ export async function curateProviders(input: { city: string; category: string; i
 
   const discoveryInstruction = isBroadFoodDiscovery
     ? `Esta es una búsqueda amplia, escaneo ${scanAttempt}. Recorre de forma sistemática restaurantes, catering, banquetes, repostería, brunch y alimentación empresarial. No confundas "candidato listo" con "prospecto descubierto": los prospectos con contacto y servicio confirmado deben salir aunque requieran revisión de reputación. No inventes datos ni fuerces una cantidad; devuelve todos los negocios reales que puedas sostener con fuentes vivas, hasta 20 en este escaneo.`
-    : 'Entrega entre 3 y 8 prospectos verificables, no solo los que pasan la curaduría. El objetivo es encontrar hasta 3 candidatos listos y conservar también los prospectos reales que requieren revisión.';
+    : `Entrega entre ${Math.min(5, perScan)} y ${perScan} prospectos verificables, no solo los que pasan la curaduría. El objetivo de este escaneo es encontrar hasta ${perScan} candidatos listos que cumplan el mínimo, y conservar también los prospectos reales que requieren revisión. No te detengas en los primeros tres: recorre subtipos y zonas de la ciudad hasta cubrir la cuota o agotar las fuentes reales.`;
 
   // Presupuesto de herramientas. Se elimina del prompt compartido de verificación porque describe
   // el descubrimiento: los subagentes solo tienen WebFetch y reciben su propio límite por roster.
@@ -1556,6 +1589,9 @@ export async function curateProviders(input: { city: string; category: string; i
   // reputación, dejando al agente solo. Sirven para saber cuánto aporta cada pieza.
   const placesEnabled = String(env('CURATION_DISABLE_PLACES') || '').trim() !== '1';
   const harvestEnabled = placesEnabled && String(env('CURATION_DISABLE_HARVEST') || '').trim() !== '1';
+  // Queda escrito en cada escaneo si Places estaba abierto y con cuanto presupuesto: es lo que
+  // permite demostrar, con el log, que una busqueda no genero peticiones.
+  logCurationEvent('places_mode', { ...runContext, measurementSwitchOff: !placesEnabled, ...getPlacesUsage() });
   if (harvestEnabled && isGooglePlacesConfigured() && hasHarvestQueries(category)) {
     try {
       const harvest = await harvestCategoryCandidates(city, category);
@@ -1620,7 +1656,7 @@ Devuelve un objeto JSON válido con exactamente dos campos: "tsv" y "research_su
     : '\nThere are no historical candidates in the database yet for this city and category; every result must be new.\n';
   const codexDiscoveryInstruction = isBroadFoodDiscovery
     ? `This is a broad scan, scan number ${scanAttempt}. Systematically cover restaurants for events, catering, banquet halls, bakeries/pastry, brunch spots, and corporate catering. Do not confuse a "ready candidate" with a "discovered prospect": prospects with confirmed contact and service must be returned even if their reputation still needs review. Do not invent data or force a quota; return every real business you can support with live sources, up to 20 in this scan.`
-    : 'Deliver between 3 and 8 verifiable prospects, not only the ones that pass full curation. The goal is to find up to 3 ready candidates and also keep real prospects that require review.';
+    : `Deliver between ${Math.min(5, perScan)} and ${perScan} verifiable prospects, not only the ones that pass full curation. The goal of this scan is to find up to ${perScan} ready candidates that meet the minimum, and also keep real prospects that require review. Do not stop at the first three: cover subtypes and areas of the city until you fill the quota or exhaust real sources.`;
   const codexPrompt = `You are a research and curation agent for event vendors ("proveedores para eventos") in Colombia.
 
 TASK: Research REAL, currently operating businesses in the city "${city}" for the category "${category}", using your built-in web_search tool.
@@ -1818,6 +1854,7 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
   if (!rawTsv) throw new Error(provider === 'gemini' ? 'GEMINI_NO_ROWS' : provider === 'codex' ? 'CODEX_NO_ROWS' : 'CLAUDE_CODE_NO_ROWS');
   const baseTsv = limitCurationTsvRows(normalizeKnownSourceUrls(rawTsv));
   const withFallbackCandidates = appendFallbackCandidates(baseTsv, discoveredCandidates, city, category, runContext);
+  // Places solo si la puerta esta abierta (opt-in explicito, sin interruptor de emergencia y con presupuesto).
   const enriched = placesEnabled
     ? await enrichMissingReputationWithGooglePlaces(withFallbackCandidates, city, runContext)
     : withFallbackCandidates;
@@ -1832,11 +1869,13 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
   if (completed.added) {
     logCurationEvent('batch_completed', { ...runContext, anadidos: completed.added, conCorreo: completed.withEmail, delAgente: filtered.tsv.split('\n').length - 1 } as never);
   }
-  if (filtered.removed) {
-    logCurationEvent('threshold_filter', { ...runContext, minRating, minReviews, removidos: filtered.removed, bajoUmbral: filtered.belowThreshold, sinReputacion: filtered.withoutReputation } as never);
-  }
-  const tsv = await fillMissingEmailsFromSourceUrls(completed.tsv, runContext);
-  const parsedBatch = parseCurationTsv(tsv);
+  const withEmails = await fillMissingEmailsFromSourceUrls(completed.tsv, runContext);
+  // Ultimo paso, determinista: lo que el validador daria por valido tiene que tener el contacto
+  // publicado en su sitio. Si no, baja a revision con el motivo; no se aprueba a ciegas.
+  const tsv = String(env('CURATION_SKIP_CONTACT_VERIFY') || '').trim() === '1'
+    ? withEmails
+    : (await verifyBatchContacts(withEmails, { minRating, minReviews }, runContext)).tsv;
+  const parsedBatch = parseCurationTsv(tsv, { minRating, minReviews });
   const validation = validateCurationBatch(parsedBatch);
   // "Descubiertos" son las filas que realmente quedaron en el lote. Contar aquí el roster
   // completo inflaba la cifra que ve el operador frente a los proveedores que existen de verdad.
@@ -1857,6 +1896,6 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
     rejectedRows: validation.rejected,
     contactSummary,
   };
-  input.onPhase?.('researching', 'Resultados listos; preparando vista previa.', { current: 4, total: 4, label: 'Validando candidatos' }, buildLivePreview(tsv, model));
+  input.onPhase?.('researching', 'Resultados listos; preparando vista previa.', { current: 4, total: 4, label: 'Validando candidatos' }, buildLivePreview(tsv, model, { minRating, minReviews }));
   return result;
 }

@@ -12,7 +12,14 @@ export type ScrapedContact = {
   instagram?: string;
   /** Página donde se encontró, para dejar rastro de la evidencia. */
   foundAt?: string;
+  /**
+   * Calificación que el propio sitio declara en su JSON-LD (`aggregateRating` de schema.org). Es
+   * un dato AUTODECLARADO por el negocio: sirve de pista para quien revisa, nunca de verificación.
+   */
+  selfDeclaredRating?: SelfDeclaredRating;
 };
+
+export type SelfDeclaredRating = { rating: number; reviews: number; foundAt: string };
 
 /** Rutas habituales de contacto en sitios colombianos, en orden de probabilidad. */
 const CONTACT_PATHS = ['/contacto', '/contact', '/nosotros', '/about', '/contactanos', '/contáctanos'];
@@ -102,6 +109,30 @@ function pickInstagram(html: string): string | undefined {
   return undefined;
 }
 
+/** Estado HTTP y HTML de una página; `html` vacío cuando no es legible (error, bloqueo o no es HTML). */
+export async function fetchPage(url: string, timeoutMs = 8000): Promise<{ status: number; html: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36',
+        'accept': 'text/html,application/xhtml+xml',
+        'accept-language': 'es-CO,es;q=0.9',
+      },
+    });
+    const type = response.headers.get('content-type') ?? '';
+    if (!response.ok || (!type.includes('html') && !type.includes('text'))) return { status: response.status, html: '' };
+    return { status: response.status, html: (await response.text()).slice(0, 600_000) };
+  } catch {
+    return { status: 0, html: '' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchText(url: string, timeoutMs: number): Promise<string | undefined> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -127,6 +158,50 @@ async function fetchText(url: string, timeoutMs: number): Promise<string | undef
   } finally {
     clearTimeout(timer);
   }
+}
+
+const JSON_LD_RE = /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+
+function findAggregateRating(node: unknown, depth = 0): { rating: number; reviews: number } | undefined {
+  if (!node || typeof node !== 'object' || depth > 6) return undefined;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = findAggregateRating(item, depth + 1);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  const record = node as Record<string, unknown>;
+  const aggregate = record.aggregateRating;
+  if (aggregate && typeof aggregate === 'object' && !Array.isArray(aggregate)) {
+    const data = aggregate as Record<string, unknown>;
+    const ratingValue = Number(String(data.ratingValue ?? '').replace(',', '.'));
+    const best = Number(data.bestRating ?? 5) || 5;
+    const count = Number(data.ratingCount ?? data.reviewCount ?? 0);
+    if (Number.isFinite(ratingValue) && ratingValue > 0 && Number.isInteger(count) && count > 0) {
+      // Escalas distintas de 5 (Booking usa 10) se llevan a 0-5, igual que hace la curaduría.
+      const rating = Math.round((best === 5 ? ratingValue : (ratingValue / best) * 5) * 10) / 10;
+      if (rating >= 0 && rating <= 5) return { rating, reviews: count };
+    }
+  }
+  for (const value of Object.values(record)) {
+    const found = findAggregateRating(value, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** `aggregateRating` publicado por el sitio en JSON-LD; undefined si no lo hay o no se puede leer. */
+export function extractSelfDeclaredRating(html: string): { rating: number; reviews: number } | undefined {
+  JSON_LD_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = JSON_LD_RE.exec(html)) !== null) {
+    try {
+      const found = findAggregateRating(JSON.parse(match[1].trim()));
+      if (found) return found;
+    } catch { /* un bloque roto no invalida los demás */ }
+  }
+  return undefined;
 }
 
 function extract(html: string, host: string): ScrapedContact {
@@ -171,6 +246,10 @@ export async function scrapeProviderContact(
     const found = extract(html, base.host);
     if (found.email && !result.email) { result.email = found.email; result.foundAt = url; }
     if (found.instagram && !result.instagram) result.instagram = found.instagram;
+    if (!result.selfDeclaredRating) {
+      const declared = extractSelfDeclaredRating(html);
+      if (declared) result.selfDeclaredRating = { ...declared, foundAt: url };
+    }
     // El correo es lo caro de encontrar; con él ya podemos parar.
     if (result.email) break;
   }

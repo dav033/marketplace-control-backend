@@ -21,6 +21,20 @@ export const CURATION_HEADERS = [
   'Categorías Adicionales',
 ] as const;
 
+/** Umbral de reputación que exige la curaduría. El estándar es 4.5 y 30; el operador puede cambiarlo por búsqueda. */
+export type CurationThreshold = { minRating: number; minReviews: number };
+export const DEFAULT_CURATION_THRESHOLD: CurationThreshold = { minRating: 4.5, minReviews: 30 };
+
+/** Recorta y completa un umbral venido del panel: NaN o ausente = estándar; fuera de rango se acota. */
+export function normalizeCurationThreshold(input?: Partial<CurationThreshold> | null): CurationThreshold {
+  const rating = Number(input?.minRating);
+  const reviews = Number(input?.minReviews);
+  return {
+    minRating: Number.isFinite(rating) ? Math.min(5, Math.max(0, Math.round(rating * 10) / 10)) : DEFAULT_CURATION_THRESHOLD.minRating,
+    minReviews: Number.isFinite(reviews) ? Math.max(0, Math.min(100000, Math.trunc(reviews))) : DEFAULT_CURATION_THRESHOLD.minReviews,
+  };
+}
+
 export type ProviderType = 1 | 2;
 export type ContactChannel = 'email' | 'whatsapp';
 
@@ -296,7 +310,10 @@ function normalizePhone(value: string): string | undefined {
 }
 
 function normalizeInstagram(value: string): string | undefined {
-  if (normalizeKey(value) === 'sin redes') return 'Sin Redes';
+  // "Sin dato" es el token genérico de ausencia del resto de columnas y el modelo lo usa también
+  // aquí aunque el prompt pida "Sin Redes". Medido con Gemini en producción (2026-09-22): 10 de 10
+  // filas con reputación y contacto válidos caían enteras por este detalle de formato.
+  if (normalizeKey(value) === 'sin redes' || normalizeKey(value) === 'sin dato') return 'Sin Redes';
   const profile = value.match(/^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9._]{1,30})\/?(?:[?#].*)?$/i)?.[1];
   const handle = profile ? `@${profile}` : value;
   return /^@[A-Za-z0-9._]{1,30}$/.test(handle) ? handle : undefined;
@@ -388,7 +405,7 @@ export function summarizeContactChannels(rows: Pick<ValidatedCurationRow, 'field
   });
 }
 
-function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord: Record<string, string>): ParsedCurationRow {
+function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord: Record<string, string>, threshold: CurationThreshold = DEFAULT_CURATION_THRESHOLD): ParsedCurationRow {
   const issues: CurationIssue[] = [];
   if (cells.some(cell => cleanText(cell) === '')) issues.push(issue(line, 'empty_cell', 'Cada columna debe tener un valor; usa "Sin dato" o "Sin Redes" cuando corresponda.'));
   if (cells.some(containsForbiddenFormatting)) issues.push(issue(line, 'forbidden_formatting', 'La fila contiene una barra vertical, comillas decorativas o caracteres de control.'));
@@ -466,13 +483,15 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
     };
     const providerType = inferProviderType(normalizedFields);
     const contactChannel = inferContactChannel(normalizedFields);
-    // Estándar único sin importar el Tipo: 4.5 estrellas y 30 reseñas mínimas en UNA plataforma.
+    // Umbral único sin importar el Tipo, en UNA plataforma: por defecto 4.5 estrellas y 30 reseñas,
+    // o el que pidió el operador para esta búsqueda (viaja con el lote hasta la importación; si no,
+    // el panel mostraba como rechazado lo que la búsqueda había traído a propósito).
     // Alternativa: reputación repartida en varias plataformas suma si ninguna sola alcanza el mínimo.
     // Nivel A/B sigue existiendo como categoría informativa por volumen (A = 50+ en una plataforma).
-    const minimumReviews = 30;
+    const minimumReviews = threshold.minReviews;
     const combinedMinPlatforms = 2;
-    const combinedMinReviews = 60;
-    const qualifyingPlatforms = multiPlatformReputation.filter(entry => entry.rating >= 4.5);
+    const combinedMinReviews = minimumReviews * 2;
+    const qualifyingPlatforms = multiPlatformReputation.filter(entry => entry.rating >= threshold.minRating);
     const combinedReviews = qualifyingPlatforms.reduce((sum, entry) => sum + entry.reviews, 0);
     const combinedQualifies = qualifyingPlatforms.length >= combinedMinPlatforms && combinedReviews >= combinedMinReviews;
     const meetsPrimaryThreshold = reviewCount !== null && reviewCount >= minimumReviews;
@@ -486,7 +505,7 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
     // Prospecto real pero sin reputación pública confirmada en una sola plataforma ni combinada: se
     // conserva y se marca para revisión manual en vez de rechazarse con un motivo de formato.
     else if (!meetsPrimaryThreshold && !combinedQualifies && (rating === null || reviewCount === null)) issues.push(issue(line, 'pending_reputation_review', 'Requiere revisión: el negocio y su contacto están confirmados, pero la calificación o las reseñas no pudieron verificarse.'));
-    if (rating !== null && rating < 4.5) issues.push(issue(line, 'low_rating', 'La calificación mínima de curaduría es 4.5.'));
+    if (rating !== null && rating < threshold.minRating) issues.push(issue(line, 'low_rating', `La calificación mínima de curaduría es ${threshold.minRating.toFixed(1)}.`));
     const reasonKey = normalizeKey(curationReason);
     // La justificación solo debe repetir los datos que EXISTEN. Un prospecto sin reputación pública
     // usa "Sin dato" de forma legítima; exigirle calificación y reseñas lo rechazaba siempre.
@@ -509,6 +528,9 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
     if (!combinedQualifies && (rating === null || reviewCount === null) && !/(sin dato|no se pudo|requiere revisi|no est[áa] public|sin rese|falta)/i.test(curationReason)) {
       issues.push(issue(line, 'missing_review_disclosure', 'Cuando la calificación o las reseñas son "Sin dato", la justificación debe decir explícitamente qué falta por confirmar.'));
     }
+    // Marcador que deja `verifyBatchContacts` cuando no pudo confirmar el contacto en el sitio del
+    // negocio. La fila conserva todos sus datos pero no se aprueba hasta que alguien lo confirme.
+    if (curationReason.includes('[Contacto no comprobado:')) issues.push(issue(line, 'contact_unverified', `Requiere revisión: ${curationReason.slice(curationReason.indexOf('[Contacto no comprobado:') + 24).replace(/\]\s*$/, '').trim()}.`));
     if (contactChannel === 'email' && normalizeKey(email) === 'sin dato') issues.push(issue(line, 'missing_email_contact', 'Las empresas clasificadas para correo deben tener un correo corporativo verificable.'));
     if (contactChannel === 'whatsapp' && !hasWhatsappPhone(normalizedFields)) issues.push(issue(line, 'missing_whatsapp_contact', 'Las empresas clasificadas para WhatsApp deben tener un número móvil colombiano verificable.'));
 
@@ -518,7 +540,7 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
   return { line, rawLine, rawCells: cells, rawRecord, issues };
 }
 
-export function parseCurationTsv(input: string): ParsedCurationBatch {
+export function parseCurationTsv(input: string, threshold: CurationThreshold = DEFAULT_CURATION_THRESHOLD): ParsedCurationBatch {
   const text = input.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
   if (!text) return { rows: [], fatalErrors: [issue(1, 'empty_input', 'El TSV está vacío.')] };
 
@@ -546,7 +568,7 @@ export function parseCurationTsv(input: string): ParsedCurationBatch {
       rows.push({ line, rawLine, rawCells, rawRecord, issues: [issue(line, 'column_count', `La fila tiene ${rawCells.length} columnas; debe tener exactamente ${CURATION_HEADERS.length}.`)] });
       continue;
     }
-    rows.push(normalizeRow(rawCells, line, rawLine, rawRecord));
+    rows.push(normalizeRow(rawCells, line, rawLine, rawRecord, threshold));
   }
 
   if (!rows.length) return { rows: [], fatalErrors: [issue(2, 'missing_rows', 'El TSV necesita al menos una fila de datos.')] };

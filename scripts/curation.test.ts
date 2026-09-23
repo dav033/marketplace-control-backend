@@ -167,3 +167,20 @@ const badHeader = parseCurationTsv(`Nombre\tCiudad\n${row()}`);
 assert.equal(badHeader.fatalErrors[0].code, 'invalid_header');
 
 console.log('curation tests passed');
+
+// "Sin dato" en la columna Instagram equivale a "Sin Redes": no puede tumbar una fila válida.
+{
+  const { CURATION_HEADERS: H, parseCurationTsv: parse, validateCurationBatch: validate } = await import('../src/lib/curation.ts');
+  const cells = new Array(20).fill('Sin dato');
+  cells[0] = 'PEP-02-001'; cells[1] = 'Pepe Anca'; cells[2] = 'Comida y Bebida'; cells[3] = 'Sin clasificar'; cells[4] = 'Barranquilla';
+  cells[7] = 'No verificado'; cells[8] = '4.6'; cells[9] = '1584'; cells[10] = 'Google'; cells[11] = 'A';
+  cells[12] = 'Calificación 4.6 con 1584 reseñas en Google; salón para eventos publicado en su sitio.';
+  cells[13] = '+57 300 2196399'; cells[14] = 'Sin dato'; cells[15] = 'eventos@pepeanca.com'; cells[16] = 'https://pepeanca.com/'; cells[17] = '2026-09-22';
+  cells[18] = 'Google:4.6:1584';
+  const result = validate(parse([H.join('\t'), cells.join('\t')].join('\n')));
+  if (result.accepted.length !== 1 || result.accepted[0].fields.instagram !== 'Sin Redes') {
+    console.log('  FALLA Instagram "Sin dato" debe aceptarse como "Sin Redes"', result.rejected[0]?.issues.map(i => i.code));
+    process.exit(1);
+  }
+  console.log('curation instagram absence tests passed');
+}

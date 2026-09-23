@@ -75,7 +75,8 @@ export const POST: APIRoute = async ({ request }) => {
 
   if (payload.action === 'import') {
     if (typeof payload.tsv !== 'string' || !payload.tsv.trim()) return json({ ok: false, error: 'Falta el lote TSV para importar.' }, 400);
-    const result = await importCurationTsv(payload.tsv);
+    // El panel manda el mismo mínimo con el que buscó; sin él, el estándar.
+    const result = await importCurationTsv(payload.tsv, { minRating: Number(payload.minRating), minReviews: Number(payload.minReviews) });
     return json(result.body, result.status);
   }
 

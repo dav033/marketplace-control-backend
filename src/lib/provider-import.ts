@@ -1,5 +1,6 @@
 import { pool } from './db';
-import { parseCurationTsv, summarizeContactChannels, validateCurationBatch } from './curation';
+import { normalizeCurationThreshold, parseCurationTsv, summarizeContactChannels, validateCurationBatch, type CurationThreshold } from './curation';
+import { verifyBatchContacts } from './contact-verify';
 
 export type CurationImportResult = {
   ok: boolean;
@@ -24,8 +25,16 @@ export function rejectedCurationRows(rows: ReturnType<typeof validateCurationBat
   }));
 }
 
-export async function importCurationTsv(raw: string): Promise<{ status: number; body: CurationImportResult }> {
-  const parsed = parseCurationTsv(raw);
+/**
+ * El umbral es el de la búsqueda que produjo el lote: si el operador pidió 3.5 y 30, un negocio de
+ * 4.0 con 40 reseñas tiene que poder importarse. Sin umbral se aplica el estándar (4.5 y 30).
+ */
+export async function importCurationTsv(raw: string, threshold?: Partial<CurationThreshold> | null, options: { verifyContacts?: boolean } = {}): Promise<{ status: number; body: CurationImportResult }> {
+  const effectiveThreshold = normalizeCurationThreshold(threshold);
+  // Se vuelve a leer el sitio al importar: el lote llega del navegador y pudo editarse a mano.
+  // Lo que no se confirma no entra, aunque la vista previa lo diera por valido.
+  const verified = options.verifyContacts === false ? raw : (await verifyBatchContacts(raw, effectiveThreshold)).tsv;
+  const parsed = parseCurationTsv(verified, effectiveThreshold);
   if (parsed.fatalErrors.length > 0) {
     return {
       status: 400,

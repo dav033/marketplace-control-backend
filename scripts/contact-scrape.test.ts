@@ -34,3 +34,24 @@ check('demasiado corto', isPlausibleEmail('a@b.c'), false);
 
 if (failed) { console.log(`contact scrape tests: ${failed} fallos`); process.exit(1); }
 console.log('contact scrape tests passed');
+
+// --- Calificación autodeclarada en JSON-LD -----------------------------------------------------
+{
+  const { extractSelfDeclaredRating } = await import('../src/lib/contact-scrape.ts');
+  const { appendSelfDeclaredRatingHint } = await import('../src/lib/gemini.ts');
+  const html = `<html><head><script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"Restaurant","name":"Casa Tabor",
+   "aggregateRating":{"@type":"AggregateRating","ratingValue":"4,7","reviewCount":"85"}}
+  </script></head><body></body></html>`;
+  const declared = extractSelfDeclaredRating(html);
+  if (!declared || declared.rating !== 4.7 || declared.reviews !== 85) { console.log('  FALLA JSON-LD básico', declared); process.exit(1); }
+  // Escala sobre 10 se lleva a 0-5; un bloque roto no invalida al siguiente; sin conteo no vale.
+  const escalado = extractSelfDeclaredRating(`<script type="application/ld+json">{no es json}</script><script type="application/ld+json">{"@graph":[{"@type":"Hotel","aggregateRating":{"ratingValue":8.4,"bestRating":10,"ratingCount":200}}]}</script>`);
+  if (!escalado || escalado.rating !== 4.2 || escalado.reviews !== 200) { console.log('  FALLA JSON-LD escalado', escalado); process.exit(1); }
+  if (extractSelfDeclaredRating(`<script type="application/ld+json">{"aggregateRating":{"ratingValue":4.9}}</script>`) !== undefined) { console.log('  FALLA JSON-LD sin conteo'); process.exit(1); }
+  if (extractSelfDeclaredRating('<html><body>sin datos</body></html>') !== undefined) { console.log('  FALLA JSON-LD ausente'); process.exit(1); }
+  // La pista va a la justificación y no toca las celdas de calificación: la fila sigue en revisión.
+  const hint = appendSelfDeclaredRatingHint('Confirma catering. No se pudo encontrar calificación pública tras una búsqueda dedicada.', { rating: 4.7, reviews: 85, foundAt: 'https://casatabor.com/' });
+  if (!hint.includes('Pista sin verificar') || !hint.includes('4.7') || !hint.includes('85') || !hint.startsWith('Confirma catering.')) { console.log('  FALLA pista', hint); process.exit(1); }
+  console.log('contact scrape self-declared rating tests passed');
+}
