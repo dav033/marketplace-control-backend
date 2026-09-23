@@ -90,6 +90,8 @@ export type HarvestRowOptions = {
   verification?: Map<string, CandidateVerification>;
   /** Omite los negocios que el agente marcó como no pertinentes para la categoría. */
   dropIrrelevant?: boolean;
+  /** De dónde salieron calificación y reseñas, tal como lo leerá quien revise la justificación. */
+  sourceLabel?: string;
 };
 
 /**
@@ -131,7 +133,7 @@ export function harvestedPlaceToRow(
   // La justificación debe repetir calificación, reseñas y plataforma: el validador las vuelve a
   // buscar dentro del texto para que ninguna cifra quede sin respaldo visible.
   const reason = sanitizeCell(
-    `Calificación ${rating} con ${reviews} reseñas públicas en Google, obtenidas de la API oficial de Places el ${options.verificationDate ?? todayIso()}. `
+    `Calificación ${rating} con ${reviews} reseñas públicas en Google, obtenidas de ${options.sourceLabel ?? 'la API oficial de Places'} el ${options.verificationDate ?? todayIso()}. `
     + `${place.type ? `Google lo clasifica como ${place.type}. ` : ''}`
     + (verified && !verified.relevant
       ? `REQUIERE REVISIÓN: el agente no pudo confirmar que preste el servicio de ${category}${verified.note ? ` (${verified.note})` : ''}. Verifícalo antes de contactar.`

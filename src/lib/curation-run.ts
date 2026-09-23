@@ -3,6 +3,17 @@ import { CURATION_HEADERS, normalizeCurationThreshold, parseCurationTsv, summari
 import { buildLivePreviewRows, curateProviders, hasContactForDiscovery, type CurationLivePreview, type CurationPhaseReporter, type GeminiCurationResult } from './gemini';
 import { saveCurationScan } from './curation-history';
 import { logCurationEvent } from './curation-log';
+import { curateWithSerper } from './serper-curation';
+
+const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
+
+/**
+ * Con `CURATION_PROVIDER=serper` los negocios salen de Google Maps vía Serper y el agente solo los
+ * verifica; con cualquier otro valor, el agente los busca en la web como hasta ahora.
+ */
+function discoversWithSerper(): boolean {
+  return String(env('CURATION_PROVIDER') || '').trim().toLowerCase() === 'serper';
+}
 
 const MAX_SCAN_ATTEMPTS = 12;
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -117,7 +128,7 @@ export async function runCurationGoal(input: {
     input.onPhase?.('preparing', `Objetivo ${targetCount}: iniciando escaneo ${attempt}.`);
     let batch: GeminiCurationResult;
     try {
-      batch = await curateProviders({
+      batch = await (discoversWithSerper() ? curateWithSerper : curateProviders)({
         city: input.city,
         category: input.category,
         instructions: iterationInstructions,

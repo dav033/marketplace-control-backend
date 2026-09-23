@@ -1338,3 +1338,19 @@ Medido: Manizales 12/12 (8 cifras correctas, 4 "Sin dato" correctos, 0 inventado
 Bucaramanga, todos los casos comprobados a mano correctos (Casa de Fercho, Burbujitas, Divertypark,
 Happy City) y 4 cifras nuevas por teléfono o dominio. Coste: 3 créditos por consulta, 6 si hace falta la
 consulta por número; la cuenta gratuita trae 2.500.
+
+### Descubrimiento con Google Maps vía Serper — 2026-09-23 (noche)
+
+La búsqueda web de Gemini (grounding) agotó la facturación: USD 14 por cada 1.000 búsquedas y un
+escaneo lanza docenas. Con `CURATION_PROVIDER=serper` (`src/lib/serper-curation.ts`) los negocios
+salen de Serper `/maps` con las consultas de la categoría (una zona de la ciudad más por escaneo:
+norte, sur, centro, occidente, oriente) y el agente solo verifica (`harvest-verify.ts`, Codex): que
+preste el servicio, con la frontera de la categoría, y el correo e Instagram. No busca proveedores.
+
+Medido en Bogotá · Repostería, un escaneo: 4 consultas (12 créditos), 53 negocios, 8 nuevos que
+cumplen 4.5/30 con contacto, 1 descartado por la verificación (vende tortas al detal), 5 aceptados
+y 2 en revisión (teléfono fijo, sin WhatsApp). ~3 min, casi todo la verificación.
+
+`verifyBatchContacts` no se usa en este modo: exige el móvil publicado en el sitio y aquí el móvil
+sale de la ficha de Maps, que es la fuente (5 de 5 filas bajaban a revisión). El correo sí se
+comprueba en la web propia del negocio y, si no aparece, se quita y la fila sigue por WhatsApp.

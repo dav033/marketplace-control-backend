@@ -2,6 +2,7 @@ import { runResearchAgent, type ClaudeRunResult } from './gemini';
 import { logCurationEvent } from './curation-log';
 import type { HarvestedPlace } from './places-harvest';
 import { scrapeProviderContact, type ScrapedContact } from './contact-scrape';
+import { categoryBoundary } from './curation';
 
 const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
 
@@ -80,18 +81,24 @@ export function extractJsonArray(output: string): unknown[] | undefined {
   return undefined;
 }
 
-export function buildVerificationPrompt(city: string, category: string, candidates: HarvestedPlace[]): string {
+export function buildVerificationPrompt(
+  city: string,
+  category: string,
+  candidates: HarvestedPlace[],
+  sourceLabel = 'la API oficial de Google Places',
+): string {
   const listado = candidates.map((place, index) => {
     const url = place.website || place.mapsUrl || 'sin sitio web';
     return `${index + 1}. ${place.name}${place.type ? ` (${place.type})` : ''} — ${url}${place.phone ? ` — tel ${place.phone}` : ''}`;
   }).join('\n');
+  const boundary = categoryBoundary(category);
 
   return `Actúa como verificador de proveedores para eventos en Colombia. NO busques proveedores nuevos.
 
-Abajo hay ${candidates.length} negocios reales de ${city}, obtenidos de la API oficial de Google Places. Su nombre, calificación, reseñas y teléfono ya están verificados y no debes tocarlos ni volver a buscarlos.
+Abajo hay ${candidates.length} negocios reales de ${city}, obtenidos de ${sourceLabel}. Su nombre, calificación, reseñas y teléfono ya están verificados y no debes tocarlos ni volver a buscarlos.
 
 Tu tarea es exactamente dos cosas por cada negocio de la lista:
-1. Decidir si presta el servicio de la categoría "${category}" para eventos. Un negocio puede tener excelente calificación y aun así no servir: el rótulo de Google es genérico y arrastra comercio parecido. Si no puedes confirmar que presta ese servicio, responde false.
+1. Decidir si presta el servicio de la categoría "${category}" para eventos. Un negocio puede tener excelente calificación y aun así no servir: el rótulo de Google es genérico y arrastra comercio parecido (tiendas de insumos, escuelas y cursos, locales que solo venden al detal). Si no puedes confirmar que presta ese servicio, responde false.${boundary ? `\n   ${boundary}` : ''}
 2. Buscar su correo electrónico de contacto y su perfil de Instagram en su sitio web o su ficha pública.
 
 LISTA:
@@ -112,6 +119,8 @@ export async function verifyHarvestedCandidates(input: {
   category: string;
   candidates: HarvestedPlace[];
   jobId?: string;
+  /** De dónde salió la lista; va en el prompt para que el agente no la ponga en duda. */
+  sourceLabel?: string;
   onPhase?: (phase: string, detail: string) => void;
 }): Promise<VerificationOutcome> {
   const startedAt = Date.now();
@@ -148,7 +157,7 @@ export async function verifyHarvestedCandidates(input: {
   let run: ClaudeRunResult;
   try {
     run = await runResearchAgent(provider, {
-      prompt: buildVerificationPrompt(input.city, input.category, input.candidates),
+      prompt: buildVerificationPrompt(input.city, input.category, input.candidates, input.sourceLabel),
       role: 'verification',
       context: { jobId: input.jobId ?? 'verify', scanNumber: 1, role: 'verification' },
       maxTurns: Math.min(60, 8 + input.candidates.length * 2),

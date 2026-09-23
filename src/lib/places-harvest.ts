@@ -123,6 +123,11 @@ export function hasHarvestQueries(category: string): boolean {
   return Boolean(CATEGORY_QUERIES[category]);
 }
 
+/** Las consultas de servicio de una categoría, ya con la ciudad. Las comparten Places y Serper. */
+export function categoryQueries(category: string, city: string): string[] {
+  return (CATEGORY_QUERIES[category] ?? []).map(template => template.replaceAll('{city}', city));
+}
+
 /**
  * Tipos de Google que nunca son un proveedor de eventos, por mucho que salgan en la consulta. Las
  * consultas por servicio arrastran comercio adyacente: buscar "invitaciones" devuelve centros

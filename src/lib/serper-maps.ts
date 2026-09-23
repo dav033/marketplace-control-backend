@@ -1,4 +1,5 @@
 import type { ReputationFinding, ReputationTarget } from './reputation-lookup';
+import type { HarvestedPlace } from './places-harvest';
 
 /**
  * Reputación desde la ficha de Google Maps vía Serper (`/maps`), sin modelo de por medio.
@@ -19,7 +20,7 @@ export function isSerperConfigured(): boolean {
   return Boolean(String(env('SERPER_API_KEY') || '').trim());
 }
 
-type SerperPlace = {
+export type SerperPlace = {
   title?: string;
   address?: string;
   phoneNumber?: string;
@@ -27,7 +28,40 @@ type SerperPlace = {
   rating?: number;
   ratingCount?: number;
   cid?: string;
+  /** Rótulo de Google en español ("Pastelería", "Servicio de catering"). */
+  type?: string;
+  types?: string[];
 };
+
+/** Créditos que gasta una consulta a `/maps`, medido contra el saldo de la cuenta. */
+export const SERPER_MAPS_CREDITS = 3;
+
+/**
+ * Una consulta de servicio a Maps ("pastelería tortas de boda Bogotá"): el listado del rubro, no la
+ * ficha de un negocio. `undefined` si no hay clave o Serper no respondió tras reintentar.
+ */
+export function searchSerperMaps(query: string): Promise<SerperPlace[] | undefined> {
+  return searchMaps(query);
+}
+
+/** La ficha de Maps con la forma que ya entienden la verificación y el constructor de filas. */
+export function serperPlaceToHarvested(place: SerperPlace): HarvestedPlace | undefined {
+  const name = String(place.title ?? '').trim();
+  if (!place.cid || !name) return undefined;
+  const rating = Number(place.rating);
+  const reviews = Number(place.ratingCount);
+  return {
+    placeId: `serper:${place.cid}`,
+    name,
+    rating: Number.isFinite(rating) && rating > 0 ? rating : undefined,
+    reviews: Number.isInteger(reviews) && reviews > 0 ? reviews : undefined,
+    phone: place.phoneNumber?.trim() || undefined,
+    website: place.website?.trim() || undefined,
+    mapsUrl: `https://www.google.com/maps?cid=${place.cid}`,
+    address: place.address?.trim() || undefined,
+    type: place.type?.trim() || place.types?.[0]?.trim() || undefined,
+  };
+}
 
 /** Últimos 10 dígitos: "+57 310 8094969", "3108094969" y "(310) 809-4969" son el mismo número. */
 export function phoneKey(value: string | undefined): string | undefined {
