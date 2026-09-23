@@ -9,9 +9,24 @@ assert.deepEqual(
 );
 
 assert.deepEqual(
-  inferAdditionalCategories({ name: 'Atalú, pastelería sin azúcar', type: 'Pastelería' }, 'Comida y Bebida'),
+  inferAdditionalCategories({ name: 'Atalú, pastelería sin azúcar', type: 'Pastelería' }, 'Repostería y pastelería'),
   [], 'una pastelería normal no gana categorías de más',
 );
+
+// Repostería es su propia categoría, no Comida y Bebida.
+assert.deepEqual(inferCategories('Tortas y cupcakes para bodas'), ['Repostería y pastelería']);
+assert.deepEqual(inferCategories('Panadería y Pastelería La Espiga'), ['Repostería y pastelería']);
+assert.deepEqual(inferCategories('Catering y banquetes con mesa de postres'), ['Comida y Bebida', 'Repostería y pastelería']);
+assert.deepEqual(inferCategories('Restaurante y parrilla'), ['Comida y Bebida'], 'un restaurante no es repostería');
+
+// Falsos positivos vistos en nombres reales.
+assert.deepEqual(inferCategories('Catering Andrea Flores'), ['Comida y Bebida'], '"Flores" es un apellido');
+assert.deepEqual(inferCategories('Tortas Marina Coro'), ['Repostería y pastelería'], '"Coro" es un apellido');
+assert.deepEqual(inferCategories('Banquetes La Quinta'), ['Comida y Bebida']);
+assert.deepEqual(inferCategories('Restaurante Bar La Terraza'), ['Comida y Bebida']);
+assert.deepEqual(inferCategories('Takuma Cocina Show'), [], 'un teppanyaki no es entretenimiento');
+assert.deepEqual(inferCategories('Alquiler de luces y sonido para eventos'), ['Servicios Especializados']);
+assert.deepEqual(inferCategories('Quinta de eventos El Paraíso'), ['Lugar']);
 assert.deepEqual(
   inferAdditionalCategories({ name: 'Hotel Dann Carlton', type: 'Hotel' }, 'Lugar'),
   [], 'la principal nunca se repite en las adicionales',

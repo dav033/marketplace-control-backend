@@ -19,14 +19,14 @@ check('elemento no textual', parseList('["ok",5]', 10), undefined);
 check('elemento vacío', parseList('["ok","   "]', 10), undefined);
 check('elemento larguísimo', parseList(JSON.stringify(['x'.repeat(61)]), 10), undefined);
 
-// Servicios: solo las 10 categorías oficiales, tope de 5.
+// Servicios: solo las 11 categorías oficiales, tope de 5.
 check('categoría oficial', parseList('["Lugar"]', 5, OFFICIAL_CATEGORIES), ['Lugar']);
 check('con tilde', parseList('["Fotografía y Video"]', 5, OFFICIAL_CATEGORIES), ['Fotografía y Video']);
 check('inventada se rechaza', parseList('["Categoria Inventada"]', 5, OFFICIAL_CATEGORIES), undefined);
 check('mayúsculas no cuelan', parseList('["LUGAR"]', 5, OFFICIAL_CATEGORIES), undefined);
 check('cinco caben', parseList('["Lugar","Música","Entretenimiento","Decoración temática","Fotografía y Video"]', 5, OFFICIAL_CATEGORIES)?.length, 5);
 check('seis se rechaza', parseList('["Lugar","Música","Entretenimiento","Decoración temática","Fotografía y Video","Invitación digital"]', 5, OFFICIAL_CATEGORIES), undefined);
-check('son diez oficiales', OFFICIAL_CATEGORIES.size, 10);
+check('son once oficiales', OFFICIAL_CATEGORIES.size, 11);
 
 // Volumen: rango de asistentes.
 check('rango válido', parseVolume('20', '180'), { min: 20, max: 180 });

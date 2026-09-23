@@ -6,13 +6,14 @@
  * acabarían separándose, y entonces uno aceptaría fichas que el otro rechaza.
  */
 
-/** Las 10 categorías oficiales de curaduría; nada fuera de esta lista entra como servicio. */
 /** Donde el proveedor completa su ficha por su cuenta. Solo sirve si su ciudad ya está abierta. */
 export const REGISTER_URL = 'https://www.happia.co/register';
 
+/** Las 11 categorías oficiales de curaduría; nada fuera de esta lista entra como servicio. */
 export const OFFICIAL_CATEGORIES = new Set([
   'Lugar', 'Comida y Bebida', 'Música', 'Servicios Especializados', 'Entretenimiento',
   'Decoración temática', 'Fotografía y Video', 'Invitación digital', 'Menaje y mantelería', 'Carpas y mobiliario',
+  'Repostería y pastelería',
 ]);
 
 /**

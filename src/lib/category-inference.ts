@@ -13,32 +13,37 @@ import { OFFICIAL_CATEGORIES } from './registration-fields';
  * que valdrían para todos.
  */
 
+// Fuera por falsos positivos vistos en nombres reales: "quinta" y "terraza" (Banquetes La Quinta,
+// Restaurante Bar La Terraza), "flores" y "coro" (apellidos), "show" suelto (Takuma Cocina Show, un
+// teppanyaki) y "sonido" suelto (alquilar sonido es producción, no un grupo musical).
 const KEYWORDS: Record<string, string[]> = {
   'Lugar': [
     'salon de eventos', 'salon de recepciones', 'centro de convenciones', 'casa de eventos',
-    'finca', 'hacienda', 'quinta', 'hotel', 'club campestre', 'terraza', 'salon social', 'venue',
+    'finca', 'hacienda', 'quinta de eventos', 'hotel', 'club campestre', 'terraza de eventos',
+    'salon social', 'venue',
   ],
   'Comida y Bebida': [
-    'catering', 'banquete', 'banquetes', 'restaurante', 'reposteria', 'pasteleria', 'panaderia',
-    'torta', 'tortas', 'ponque', 'postre', 'postres', 'brownie', 'brownies', 'cheesecake',
-    'buffet', 'bufet', 'cocteleria', 'coctel', 'gastronomia', 'chef', 'heladeria', 'pizzeria',
-    'asadero', 'parrilla', 'sushi', 'cafeteria', 'dulces', 'comida', 'bebidas', 'bar',
+    'catering', 'banquete', 'banquetes', 'restaurante', 'buffet', 'bufet', 'cocteleria', 'coctel',
+    'gastronomia', 'chef', 'heladeria', 'pizzeria', 'asadero', 'parrilla', 'sushi', 'cafeteria',
+    'comida', 'bebidas', 'bar',
   ],
   'Música': [
-    'dj', 'orquesta', 'banda', 'grupo musical', 'mariachi', 'mariachis', 'sonido', 'musica',
-    'musical', 'vallenato', 'papayera', 'saxofonista', 'violinista', 'coro', 'serenata',
+    'dj', 'orquesta', 'banda', 'grupo musical', 'mariachi', 'mariachis', 'musica', 'musical',
+    'vallenato', 'papayera', 'saxofonista', 'violinista', 'serenata',
   ],
   'Servicios Especializados': [
     'wedding planner', 'organizador de eventos', 'organizacion de eventos', 'planeacion de eventos',
     'produccion de eventos', 'logistica', 'protocolo', 'coordinacion de eventos', 'meseros',
+    'luces y sonido', 'sonido e iluminacion',
   ],
   'Entretenimiento': [
-    'show', 'shows', 'animacion', 'recreacion', 'recreacionista', 'payaso', 'payasos', 'hora loca',
-    'zanqueros', 'mago', 'magos', 'karaoke', 'inflables', 'circo', 'comediante', 'fiesta infantil',
+    'show infantil', 'shows infantiles', 'show de magia', 'show en vivo', 'shows en vivo',
+    'animacion', 'recreacion', 'recreacionista', 'payaso', 'payasos', 'hora loca', 'zanqueros',
+    'mago', 'magos', 'karaoke', 'inflables', 'circo', 'comediante', 'fiesta infantil',
   ],
   'Decoración temática': [
-    'decoracion', 'decoraciones', 'globos', 'flores', 'floristeria', 'floral', 'ambientacion',
-    'escenografia', 'arreglos florales',
+    'decoracion', 'decoraciones', 'globos', 'floristeria', 'floral', 'arreglos florales',
+    'flores para eventos', 'ambientacion', 'escenografia',
   ],
   'Fotografía y Video': [
     'fotografia', 'fotografo', 'foto', 'fotos', 'video', 'videos', 'audiovisual', 'filmacion',
@@ -51,6 +56,11 @@ const KEYWORDS: Record<string, string[]> = {
   'Carpas y mobiliario': [
     'carpa', 'carpas', 'toldo', 'toldos', 'mobiliario', 'alquiler de sillas', 'alquiler de mesas',
     'sillas', 'mesas', 'tarima', 'tarimas', 'pista de baile',
+  ],
+  'Repostería y pastelería': [
+    'reposteria', 'pasteleria', 'panaderia', 'torta', 'tortas', 'ponque', 'ponques', 'pastel',
+    'pasteles', 'cupcake', 'cupcakes', 'postre', 'postres', 'brownie', 'brownies', 'cheesecake',
+    'galletas', 'macarons', 'mesa de dulces', 'mesa de postres', 'dulces', 'cake', 'cakes', 'bakery',
   ],
 };
 

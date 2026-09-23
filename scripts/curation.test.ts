@@ -135,7 +135,7 @@ const additionalRepeatsPrimary = parseOne(`${header}\n${row({ 0: 'MDE-01-001', 2
 assert.equal(additionalRepeatsPrimary.accepted.length, 0);
 assert.ok(additionalRepeatsPrimary.rejected[0].issues.some(item => item.code === 'invalid_additional_categories'));
 
-// Categoría adicional que no es una de las 10 oficiales.
+// Categoría adicional que no es una de las 11 oficiales.
 const additionalUnknownCategory = parseOne(`${header}\n${row({ 19: 'Categoria Inventada' })}`);
 assert.equal(additionalUnknownCategory.accepted.length, 0);
 assert.ok(additionalUnknownCategory.rejected[0].issues.some(item => item.code === 'invalid_additional_categories'));

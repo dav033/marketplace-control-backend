@@ -127,6 +127,8 @@ const CATEGORY_BY_KEY: Record<string, string> = {
   'menaje y manteleria': 'Menaje y mantelería',
   '10': 'Carpas y mobiliario',
   'carpas y mobiliario': 'Carpas y mobiliario',
+  '11': 'Repostería y pastelería',
+  'reposteria y pasteleria': 'Repostería y pastelería',
 };
 
 export const CATEGORY_CODE: Record<string, string> = {
@@ -140,7 +142,28 @@ export const CATEGORY_CODE: Record<string, string> = {
   'Invitación digital': '08',
   'Menaje y mantelería': '09',
   'Carpas y mobiliario': '10',
+  'Repostería y pastelería': '11',
 };
+
+/** "Lugar 01, Comida y Bebida 02, ..." para los prompts: una categoría nueva no puede faltar en ellos. */
+export const CATEGORY_CODES_TEXT = Object.entries(CATEGORY_CODE).map(([category, code]) => `${category} ${code}`).join(', ');
+
+/**
+ * Dónde termina una categoría y empieza su vecina, para las que el agente confunde.
+ *
+ * Repostería nació separándose de Comida y Bebida: una pastelería que hace tortas de boda salía como
+ * "Comida y Bebida" junto a los caterings, y quien busca tortas no busca un banquete. Sin la frontera
+ * escrita en el prompt el agente sigue metiendo pastelerías en Comida y Bebida por costumbre, y un
+ * catering con estación de postres en Repostería.
+ */
+const CATEGORY_BOUNDARIES: Record<string, string> = {
+  'Comida y Bebida': 'Qué NO es "Comida y Bebida": pastelerías, reposterías, panaderías y negocios cuyo producto principal son tortas, ponqués, cupcakes, postres, galletas o mesas de dulces. Esos son "Repostería y pastelería"; no los incluyas aquí como categoría principal. Un catering o restaurante que además tiene una línea propia de tortas o postres con evidencia sigue siendo "Comida y Bebida" y puede llevar "Repostería y pastelería" en Categorías Adicionales; ofrecer postre dentro de un menú no basta.',
+  'Repostería y pastelería': 'Qué SÍ es "Repostería y pastelería": negocios cuyo producto principal son tortas (de boda, cumpleaños, temáticas), ponqués, cupcakes, postres, galletas decoradas, macarons o mesas de dulces para eventos. Qué NO es: restaurantes, caterings, banquetes, buffets, comida salada, cafeterías, bares, coctelería ni heladerías; esos son "Comida y Bebida" aunque tengan postres en la carta. Tampoco lo es una panadería de barrio que solo vende pan del día sin pedidos para eventos. Si el negocio hace repostería por encargo y además catering salado, decide por lo que más evidencia su sitio o perfil, y lista la otra en Categorías Adicionales.',
+};
+
+export function categoryBoundary(category: string): string {
+  return CATEGORY_BOUNDARIES[category] ?? '';
+}
 
 const ZONE_BY_KEY: Record<string, string> = {
   'zona norte comercial alta': 'Zona Norte / Comercial Alta',
@@ -276,7 +299,7 @@ export function parseMultiPlatformReputation(value: string): MultiPlatformReputa
 }
 
 /**
- * Formato: "Categoría;Categoría;..." con las 10 categorías oficiales, o "Sin dato"/"Ninguna" si el
+ * Formato: "Categoría;Categoría;..." con las 11 categorías oficiales, o "Sin dato"/"Ninguna" si el
  * negocio no ofrece servicios de otras categorías. No debe repetir la categoría principal (`category`,
  * columna 2): un hotel que es "Lugar" y ADEMÁS ofrece catering listaría "Comida y Bebida" aquí, no
  * "Lugar" de nuevo.
@@ -437,7 +460,7 @@ function normalizeRow(cells: string[], line: number, rawLine: string, rawRecord:
   const additionalCategories = category === undefined ? undefined : parseAdditionalCategories(additionalCategoriesValue, category);
 
   if (!/^[A-Z]{3}-\d{2}-\d{3}$/.test(id)) issues.push(issue(line, 'invalid_id', 'El ID debe tener el formato COD-CC-###.'));
-  if (category === undefined) issues.push(issue(line, 'invalid_category', 'La categoría no pertenece a las 10 categorías oficiales.'));
+  if (category === undefined) issues.push(issue(line, 'invalid_category', 'La categoría no pertenece a las 11 categorías oficiales.'));
   else if (/^[A-Z]{3}-\d{2}-\d{3}$/.test(id) && id.slice(4, 6) !== CATEGORY_CODE[category]) issues.push(issue(line, 'category_id_mismatch', 'El código de categoría del ID no coincide con la categoría.'));
   if (!displayName || normalizeKey(displayName) === 'sin dato') issues.push(issue(line, 'invalid_name', 'El nombre comercial es obligatorio.'));
   if (!segment) issues.push(issue(line, 'invalid_segment', 'Segmento debe ser Bajo Costo, Premium o Sin clasificar.'));

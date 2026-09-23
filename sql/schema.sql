@@ -189,7 +189,7 @@ ALTER TABLE marketplace.campaign_sends
   ADD COLUMN IF NOT EXISTS form_submitted_at timestamptz;
 
 -- Lo que el proveedor declara sobre si mismo. Productos en lista abierta; servicios acotados a las
--- 10 categorias oficiales; volumen como rango de asistentes, del que se deriva la Escala de
+-- 11 categorias oficiales; volumen como rango de asistentes, del que se deriva la Escala de
 -- curaduria sin pedirle al proveedor que entienda esa clasificacion interna.
 ALTER TABLE marketplace.registration_submissions
   ADD COLUMN IF NOT EXISTS products text[] NOT NULL DEFAULT '{}',

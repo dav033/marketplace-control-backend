@@ -56,7 +56,7 @@ const CATEGORY_QUERIES: Record<string, string[]> = {
     'servicio de catering en {city}',
     'banquetes para eventos {city}',
     'restaurante para eventos {city}',
-    'repostería y tortas para eventos {city}',
+    'buffet para eventos {city}',
   ],
   'Música': [
     'grupo musical para eventos {city}',
@@ -105,6 +105,12 @@ const CATEGORY_QUERIES: Record<string, string[]> = {
     'alquiler de sillas y mesas {city}',
     'mobiliario para eventos {city}',
     'alquiler de toldos y tarimas {city}',
+  ],
+  'Repostería y pastelería': [
+    'pastelería tortas de boda {city}',
+    'repostería por encargo para eventos {city}',
+    'tortas personalizadas para cumpleaños {city}',
+    'mesa de postres y dulces para eventos {city}',
   ],
 };
 

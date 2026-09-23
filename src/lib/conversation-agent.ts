@@ -93,7 +93,7 @@ const CATEGORY_GUIDES: Record<string, { topics: string; services: string }> = {
     services: 'mobiliario incluido, catering propio o externo, decoración, parqueadero, paquetes todo incluido',
   },
   'Comida y Bebida': {
-    topics: 'tipo de cocina o especialidad, menús para eventos, opciones especiales (sin azúcar, vegetarianas, sin gluten)',
+    topics: 'tipo de cocina o especialidad, menús para eventos, opciones especiales (vegetarianas, sin gluten)',
     services: 'entrega a domicilio, paquetes para eventos, estaciones o buffet, meseros y montaje, degustación previa, pedidos personalizados',
   },
   'Música': {
@@ -127,6 +127,10 @@ const CATEGORY_GUIDES: Record<string, { topics: string; services: string }> = {
   'Carpas y mobiliario': {
     topics: 'tamaños de carpa y tipos de mobiliario',
     services: 'montaje y desmontaje, transporte, iluminación, paquetes por número de invitados',
+  },
+  'Repostería y pastelería': {
+    topics: 'qué hacen (tortas, ponqués, cupcakes, postres, mesas de dulces), diseños personalizados o temáticos, opciones especiales (sin azúcar, sin gluten, veganas)',
+    services: 'pedidos por encargo, entrega a domicilio, montaje de mesa de postres, degustación previa, tiempos de anticipación',
   },
 };
 

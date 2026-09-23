@@ -38,11 +38,12 @@ export function parseSimulationTrigger(text: string): string | null {
   return SIMULATION_TRIGGER.exec(text)?.[1]?.toLowerCase() ?? null;
 }
 
-// Las categorías que puede marcar el proveedor son las mismas 10 de la curaduría: si aquí
+// Las categorías que puede marcar el proveedor son las mismas 11 de la curaduría: si aquí
 // apareciera una etiqueta libre, la ficha resultante no podría cruzarse con el resto del sistema.
 export const REGISTRATION_CATEGORIES = [
   'Lugar', 'Comida y Bebida', 'Música', 'Servicios Especializados', 'Entretenimiento',
   'Decoración temática', 'Fotografía y Video', 'Invitación digital', 'Menaje y mantelería', 'Carpas y mobiliario',
+  'Repostería y pastelería',
 ];
 
 export type RegistrationLinkState = 'valid' | 'expired' | 'submitted' | 'unknown';
