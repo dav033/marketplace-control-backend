@@ -1,5 +1,6 @@
 import { parseMultiPlatformReputation } from './curation';
 import { logCurationEvent, type ClaudeRunContext } from './curation-log';
+import { isSerperConfigured, lookupSerperReputation } from './serper-maps';
 
 /**
  * Subagentes de reputación: una llamada corta a Gemini por cada fila que el lote dejó en "Sin dato".
@@ -149,6 +150,25 @@ async function singleLookup(target: ReputationTarget): Promise<{ finding?: Reput
 const isMissing = (value: string | undefined) => /^sin dato$/i.test((value ?? '').trim());
 
 /**
+ * Quita de la justificación las frases que dicen que no hay reputación: con la cifra ya verificada,
+ * dejarlas deja una fila que se contradice ("no registra reseñas… 4.7 con 338 reseñas").
+ */
+export function dropMissingReputationClaims(reason: string): string {
+  return reason
+    .split(/(?<=[.!?])\s+/)
+    .filter(sentence => !(/(requiere revisi|sin dato|no registra|no cuenta|no tiene|carece|sin confirmar|no se pudo)/i.test(sentence) && /(calificaci|reseñ|reputaci|opinion)/i.test(sentence)))
+    .join(' ')
+    .trim();
+}
+
+/** Serper (ficha de Maps como datos) si hay clave; si no, los subagentes de Gemini. */
+export function defaultReputationSource(): { name: 'serper' | 'gemini'; lookup: (target: ReputationTarget) => Promise<ReputationFinding | undefined> } | undefined {
+  if (isSerperConfigured()) return { name: 'serper', lookup: lookupSerperReputation };
+  if (env('GEMINI_API_KEY')) return { name: 'gemini', lookup: lookupReputation };
+  return undefined;
+}
+
+/**
  * Rellena calificación, reseñas, plataforma, nivel y justificación de las filas en "Sin dato", con la
  * misma forma que dejaba Places, para que `validateCurationBatch` (que exige ver las cifras en la
  * justificación) las lea igual. Lo que el subagente no confirma queda como estaba: "Requiere revisión".
@@ -157,9 +177,10 @@ export async function enrichMissingReputationWithSubagents(
   tsv: string,
   city: string,
   context?: ClaudeRunContext,
-  lookup: (target: ReputationTarget) => Promise<ReputationFinding | undefined> = lookupReputation,
+  lookup?: (target: ReputationTarget) => Promise<ReputationFinding | undefined>,
 ): Promise<string> {
-  if (!env('GEMINI_API_KEY') && lookup === lookupReputation) return tsv;
+  const source = lookup ? { name: 'custom', lookup } : defaultReputationSource();
+  if (!source) return tsv;
   const lines = tsv.replace(/\r\n?/g, '\n').split('\n');
   const header = lines[0] ?? '';
   const rows = lines.slice(1).filter(line => line.trim());
@@ -170,7 +191,7 @@ export async function enrichMissingReputationWithSubagents(
   let enriched = 0;
   for (let start = 0; start < pending.length; start += CONCURRENCY) {
     await Promise.all(pending.slice(start, start + CONCURRENCY).map(async ({ index, cells }) => {
-      const found = await lookup({
+      const found = await source.lookup({
         name: cells[1].trim(),
         city: (cells[4] ?? '').trim() || city,
         phone: isMissing(cells[13]) ? undefined : cells[13]?.trim(),
@@ -183,8 +204,9 @@ export async function enrichMissingReputationWithSubagents(
       cells[9] = found.reviews;
       cells[10] = found.platform;
       cells[11] = Number(found.reviews) >= 50 ? 'A' : 'B';
-      const baseReason = (cells[12] ?? '').trim();
-      cells[12] = `${baseReason ? `${baseReason} ` : ''}Reputación hallada por búsqueda dedicada: ${found.rating} con ${found.reviews} reseñas en ${found.platform}.`.slice(0, 900);
+      const baseReason = dropMissingReputationClaims(cells[12] ?? '');
+      const how = source.name === 'serper' ? 'Reputación verificada en la ficha de Google Maps' : 'Reputación hallada por búsqueda dedicada';
+      cells[12] = `${baseReason ? `${baseReason} ` : ''}${how}: ${found.rating} con ${found.reviews} reseñas en ${found.platform}.`.slice(0, 900);
       const others = (parseMultiPlatformReputation(cells[18] ?? 'Sin dato') ?? []).filter(entry => entry.platform.toLowerCase() !== found.platform.toLowerCase());
       cells[18] = [...others, { platform: found.platform, rating: Number(found.rating), reviews: Number(found.reviews) }]
         .map(entry => `${entry.platform}:${entry.rating.toFixed(1)}:${entry.reviews}`)
@@ -192,6 +214,6 @@ export async function enrichMissingReputationWithSubagents(
       updated[index] = cells.join('\t');
     }));
   }
-  if (context) logCurationEvent('reputation_subagents', { ...context, attempted: pending.length, enriched });
+  if (context) logCurationEvent('reputation_subagents', { ...context, source: source.name, attempted: pending.length, enriched });
   return [header, ...updated].join('\n');
 }

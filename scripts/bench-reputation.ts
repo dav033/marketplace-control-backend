@@ -9,6 +9,13 @@
 // `expected: null` significa que la ficha no tiene reseñas: cualquier cifra ahí es inventada.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { lookupReputationRaw } from '../src/lib/reputation-lookup.ts';
+import { lookupSerperReputation } from '../src/lib/serper-maps.ts';
+
+// REPUTATION_SOURCE=serper mide la ficha de Maps vía Serper; por defecto, los subagentes de Gemini.
+const source = process.env.REPUTATION_SOURCE === 'serper' ? 'serper' : 'gemini';
+const lookup = async (target: Parameters<typeof lookupReputationRaw>[0]) => source === 'serper'
+  ? { finding: await lookupSerperReputation(target), attempts: 1 } as Awaited<ReturnType<typeof lookupReputationRaw>>
+  : lookupReputationRaw(target);
 
 type Case = { id: string; name: string; phone?: string; website?: string; hint?: string; expected?: { rating: string; reviews: string } | null };
 
@@ -19,7 +26,7 @@ const cases = JSON.parse(readFileSync(casesPath, 'utf8')) as Case[];
 const started = Date.now();
 const results = await Promise.all(cases.map(async item => {
   const t0 = Date.now();
-  const answer = await lookupReputationRaw({ name: item.name, city, phone: item.phone, website: item.website, hint: item.hint });
+  const answer = await lookup({ name: item.name, city, phone: item.phone, website: item.website, hint: item.hint });
   const got = answer.finding;
   let verdict: 'correcto' | 'sin_dato_ok' | 'omitido' | 'inventado' | 'cifra_distinta' | 'sin_referencia';
   if (item.expected === undefined) verdict = 'sin_referencia';

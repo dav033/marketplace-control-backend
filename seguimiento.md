@@ -1319,3 +1319,22 @@ Bucaramanga, en local: 3 con cifra (Burbujitas 4.5/2, Divertypark 4.5/47, Happy 
 Facebook, o ficha sin reseñas); Fiesta Kids tiene 4.9/331 pero la ficha no publica teléfono y coincidir
 solo por nombre se rechaza a propósito. Manizales con reintento: 7 correctos, 4 sin dato correctos,
 1 omitido, 0 inventados.
+
+### Serper como fuente de reputación — 2026-09-23 (tarde)
+
+Con los subagentes ya corriendo, Bucaramanga · Menaje devolvió 7 filas en "Sin dato": los subagentes
+encontraron cifra en 7 de 14, pero esas quedaron por debajo del umbral y el filtro las retiró; las que
+llegan al panel son justo las no verificadas. Y la búsqueda de Gemini perdía fichas reales: Casa de
+Fercho (4.7/338, mismo móvil, cumple) salió en 2 de 6 intentos idénticos, y con 4.8/336 (índice viejo).
+
+`src/lib/serper-maps.ts`: la ficha de Maps vía Serper (`/maps`) como datos (`rating`, `ratingCount`,
+`phoneNumber`, `website`), sin modelo. La identidad la decide el código: mismo móvil (últimos 10
+dígitos) o mismo dominio propio (no wixsite/webnode/facebook). Si por nombre no coincide ninguna, una
+consulta por el número (`+57 314 8576552`, sin ciudad: G&M está rotulada "Patty Bridal"). 429/5xx se
+reintentan. Con `SERPER_API_KEY` es la fuente por defecto; sin clave, siguen los subagentes de Gemini.
+Al rellenar la cifra se quitan de la justificación las frases que decían que no había reputación.
+
+Medido: Manizales 12/12 (8 cifras correctas, 4 "Sin dato" correctos, 0 inventados, ~3 s por negocio);
+Bucaramanga, todos los casos comprobados a mano correctos (Casa de Fercho, Burbujitas, Divertypark,
+Happy City) y 4 cifras nuevas por teléfono o dominio. Coste: 3 créditos por consulta, 6 si hace falta la
+consulta por número; la cuenta gratuita trae 2.500.
