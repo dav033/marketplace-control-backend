@@ -3,6 +3,7 @@ import { harvestCategoryCandidates, hasHarvestQueries, isContactable, isGooglePl
 import { harvestToCurationTsv, harvestedPlaceToRow } from '../../../lib/harvest-import';
 import { CURATION_HEADERS } from '../../../lib/curation';
 import { verifyHarvestedCandidates } from '../../../lib/harvest-verify';
+import { getPlacesUsage, placesBlockReason } from '../../../lib/places-gate';
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
@@ -27,7 +28,18 @@ export const POST: APIRoute = async ({ request }) => {
   const category = String(payload.category ?? '').trim();
   if (!city) return json({ ok: false, error: 'Falta la ciudad.' }, 400);
   if (!hasHarvestQueries(category)) return json({ ok: false, error: 'La categoría no tiene consultas de cosecha definidas.' }, 400);
-  if (!isGooglePlacesConfiguredForHarvest()) return json({ ok: false, error: 'GOOGLE_PLACES_API_KEY no está configurada.' }, 503);
+  if (!isGooglePlacesConfiguredForHarvest()) {
+    // El motivo se dice tal cual: una clave presente sin opt-in es la situacion normal, no un fallo.
+    const reason = placesBlockReason();
+    const message = reason === 'not_configured'
+      ? 'GOOGLE_PLACES_API_KEY no está configurada.'
+      : reason === 'kill_switch'
+        ? 'Google Places está apagado por el interruptor de emergencia (GOOGLE_PLACES_KILL_SWITCH).'
+        : reason === 'limit_reached'
+          ? 'Google Places agotó el tope de solicitudes de hoy (GOOGLE_PLACES_MAX_REQUESTS).'
+          : 'Google Places está desactivado: la cosecha directa requiere GOOGLE_PLACES_OPT_IN=1 (cada consulta se factura como SKU Enterprise).';
+    return json({ ok: false, error: message, reason, places: getPlacesUsage() }, 503);
+  }
 
   try {
     const harvest = await harvestCategoryCandidates(city, category);

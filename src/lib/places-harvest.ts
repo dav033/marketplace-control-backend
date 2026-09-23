@@ -1,4 +1,4 @@
-const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
+import { isGooglePlacesEnabled, placesTextSearch } from './places-gate';
 
 /**
  * Cosecha de candidatos directamente desde Google Places.
@@ -108,8 +108,9 @@ const CATEGORY_QUERIES: Record<string, string[]> = {
   ],
 };
 
+/** Igual que `isGooglePlacesConfigured`: clave + opt-in + sin interruptor + presupuesto. */
 export function isGooglePlacesConfiguredForHarvest(): boolean {
-  return Boolean(env('GOOGLE_PLACES_API_KEY'));
+  return isGooglePlacesEnabled();
 }
 
 export function hasHarvestQueries(category: string): boolean {
@@ -161,22 +162,13 @@ type RawPlace = {
 };
 
 async function searchPage(textQuery: string, pageToken?: string): Promise<{ places: RawPlace[]; nextPageToken?: string } | undefined> {
-  const apiKey = env('GOOGLE_PLACES_API_KEY');
-  if (!apiKey) return undefined;
-  const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': FIELD_MASK,
-    },
-    body: JSON.stringify(pageToken ? { textQuery, languageCode: 'es', pageToken } : { textQuery, languageCode: 'es' }),
-  });
-  if (!response.ok) {
-    console.error('Places harvest failed', response.status, (await response.text().catch(() => '')).slice(0, 300));
-    return undefined;
-  }
-  const body = await response.json() as { places?: RawPlace[]; nextPageToken?: string };
+  const outcome = await placesTextSearch(
+    pageToken ? { textQuery, languageCode: 'es', pageToken } : { textQuery, languageCode: 'es' },
+    FIELD_MASK,
+    { purpose: 'harvest' },
+  );
+  if (outcome.status !== 'ok') return undefined;
+  const body = outcome.body as { places?: RawPlace[]; nextPageToken?: string };
   return { places: body.places ?? [], nextPageToken: body.nextPageToken };
 }
 
@@ -222,12 +214,31 @@ export async function harvestCategoryCandidates(
   const byPlaceId = new Map<string, HarvestedPlace>();
   const queriesUsed: string[] = [];
   let apiCalls = 0;
+  const finish = (): HarvestResult => {
+    // Se conserva el orden en que Places devolvió los resultados, que es su ranking de RELEVANCIA.
+    // Ordenar por número de reseñas parece razonable y es un error: asciende a los negocios más
+    // grandes que apenas rozan la consulta — centros comerciales, parques de ocio — por encima del
+    // proveedor pequeño y pertinente. Medido: al ordenar por reseñas, los 5 primeros "listos" de
+    // "Invitación digital" eran cuatro centros comerciales y una panadería.
+    const candidates = [...byPlaceId.values()];
+    return {
+      city,
+      category,
+      candidates,
+      ready: candidates.filter(meetsReadyThreshold),
+      apiCalls,
+      durationMs: Date.now() - startedAt,
+      queriesUsed,
+    };
+  };
 
   for (const template of templates) {
     const query = template.replaceAll('{city}', city);
     queriesUsed.push(query);
     let pageToken: string | undefined;
     for (let page = 0; page < pagesPerQuery; page += 1) {
+      // Si la puerta bloquea la primera petición, las demás también saldrán bloqueadas: se corta.
+      if (!isGooglePlacesEnabled()) return finish();
       const result = await searchPage(query, pageToken);
       apiCalls += 1;
       if (!result) break;
@@ -245,21 +256,7 @@ export async function harvestCategoryCandidates(
     }
   }
 
-  // Se conserva el orden en que Places devolvió los resultados, que es su ranking de RELEVANCIA.
-  // Ordenar por número de reseñas parece razonable y es un error: asciende a los negocios más
-  // grandes que apenas rozan la consulta — centros comerciales, parques de ocio — por encima del
-  // proveedor pequeño y pertinente. Medido: al ordenar por reseñas, los 5 primeros "listos" de
-  // "Invitación digital" eran cuatro centros comerciales y una panadería.
-  const candidates = [...byPlaceId.values()];
-  return {
-    city,
-    category,
-    candidates,
-    ready: candidates.filter(meetsReadyThreshold),
-    apiCalls,
-    durationMs: Date.now() - startedAt,
-    queriesUsed,
-  };
+  return finish();
 }
 
 /**

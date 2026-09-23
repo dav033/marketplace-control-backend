@@ -16,6 +16,9 @@ interface ImportMetaEnv {
   readonly CODEX_MODEL?: string;
   readonly CODEX_REASONING_EFFORT?: string;
   readonly GOOGLE_PLACES_API_KEY?: string;
+  readonly GOOGLE_PLACES_OPT_IN?: string;
+  readonly GOOGLE_PLACES_KILL_SWITCH?: string;
+  readonly GOOGLE_PLACES_MAX_REQUESTS?: string;
   readonly OMNISEND_API_KEY?: string;
   readonly OMNISEND_VERSION?: string;
   readonly OMNISEND_SENDER_NAME?: string;

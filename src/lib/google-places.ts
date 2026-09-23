@@ -1,7 +1,11 @@
-const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
+import { isGooglePlacesEnabled, placesTextSearch } from './places-gate';
 
+/**
+ * "Configurada" significa "se puede usar ahora": clave presente, opt-in explícito, sin interruptor
+ * de emergencia y con presupuesto. La clave sola no basta (ver `places-gate.ts`).
+ */
 export function isGooglePlacesConfigured(): boolean {
-  return Boolean(env('GOOGLE_PLACES_API_KEY'));
+  return isGooglePlacesEnabled();
 }
 
 export type GooglePlaceReputation = { rating: string; reviews: string; platform: 'Google'; matchedBy: 'phone' | 'website' | 'name' };
@@ -129,22 +133,9 @@ type PlaceResult = {
 const FIELD_MASK = 'places.displayName,places.rating,places.userRatingCount,places.formattedAddress,places.websiteUri';
 
 async function searchText(textQuery: string): Promise<PlaceResult[] | undefined> {
-  const apiKey = env('GOOGLE_PLACES_API_KEY');
-  if (!apiKey) return undefined;
-  const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': FIELD_MASK,
-    },
-    body: JSON.stringify({ textQuery, languageCode: 'es' }),
-  });
-  if (!response.ok) {
-    console.error('Google Places lookup failed', response.status, (await response.text().catch(() => '')).slice(0, 300));
-    return undefined;
-  }
-  const body = await response.json() as { places?: PlaceResult[] };
+  const outcome = await placesTextSearch({ textQuery, languageCode: 'es' }, FIELD_MASK, { purpose: 'reputation_lookup' });
+  if (outcome.status !== 'ok') return undefined;
+  const body = outcome.body as { places?: PlaceResult[] };
   return body.places ?? [];
 }
 
@@ -173,7 +164,7 @@ export async function lookupGooglePlaceReputation(
   city: string,
   options: { phone?: string; websiteUrl?: string } = {},
 ): Promise<GooglePlaceReputation | undefined> {
-  if (!env('GOOGLE_PLACES_API_KEY')) return undefined;
+  if (!isGooglePlacesEnabled()) return undefined;
   try {
     const phone = options.phone ? toE164Colombia(options.phone) : undefined;
     if (phone) {
