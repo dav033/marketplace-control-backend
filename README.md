@@ -227,22 +227,106 @@ Un candidato listo necesita **calificación mínima 4.5 y 30 reseñas exactas en
 sin distinción por tipo de proveedor (`src/lib/curation.ts`). Nivel A = 50+ reseñas; Nivel B = 30-49
 o reputación combinada.
 
+**El operador puede cambiar el mínimo por búsqueda** (calificación y reseñas en el formulario de
+"Traer proveedores"). Ese umbral viaja al prompt, al filtro del lote, al validador
+(`parseCurationTsv(tsv, { minRating, minReviews })`) y a la importación (el panel lo manda con el
+lote). Antes el validador tenía 4.5 fijo y un negocio de 4.0 con 40 reseñas salía "rechazado" aunque
+la búsqueda lo hubiera traído a propósito con mínimo 3.5. Sin umbral explícito rige el estándar.
+
+**El objetivo de una búsqueda son negocios que cumplen**, no filas: la corrida encadena escaneos
+(hasta 12) hasta juntar `targetCount` candidatos aceptados con contacto, y solo se rinde antes tras 3
+escaneos seguidos sin un negocio nuevo válido. Cada escaneo pide al agente lo que falta (mínimo 8,
+máximo 20 por lote) en vez de "entre 3 y 8" fijos. Las filas en revisión se muestran detrás de las
+válidas y no cuentan para el objetivo. Medido en Cartagena · Comida y Bebida con mínimo 3.5 y 30:
+20 válidos en 5 escaneos y 294 s, 20 más en revisión, 0 llamadas a Places.
+
 **Reputación combinada:** si ninguna plataforma sola llega a 30 reseñas, el candidato igual pasa si
 2 o más plataformas con calificación 4.5+ suman **60 o más** reseñas combinadas. Esto vive en la
 columna 19 del TSV, "Reputación Multiplataforma" (`Plataforma:Calificación:Reseñas;...`), que registra
 TODAS las plataformas encontradas, no solo la mejor. La justificación debe decir "reputación
 combinada" y el total exacto cuando aplica este camino; si no, `invalid_curation_reason` la rechaza.
 
-**Google Places API:** Google Maps renderiza su calificación con JavaScript y no la expone como texto
-rastreable — confirmado empíricamente que ni una búsqueda web genérica ni un fetch directo a Maps la
-muestran, aunque exista y sea visible para una persona. Por eso ningún prompt lo soluciona. Con
-`GOOGLE_PLACES_API_KEY` configurada (`src/lib/google-places.ts`), cualquier fila que quede en "Sin
-dato" se reintenta después del escaneo contra la API oficial de Google Places (Text Search), que
-devuelve `rating`/`userRatingCount` como datos estructurados; si encuentra algo, reescribe
-calificación, reseñas, plataforma, nivel y justificación de la fila, y suma la entrada de Google a la
-columna multiplataforma. Sin la key, esta corrección es un no-op silencioso. Precio real (2026): 5,000
-llamadas gratis al mes con Text Search, ~$32/1000 adicionales — muy por encima del volumen que genera
-esta app.
+**Sin reputación verificable no se aprueba, pero tampoco se pierde.** Una fila con calificación o
+reseñas en "Sin dato" ya no se descarta en el filtro de umbral: se conserva, el validador la marca
+`pending_reputation_review` y el panel la muestra como "Requiere revisión". El importador nunca la
+acepta hasta que alguien confirme la cifra. Antes desaparecía en silencio (52 de 72 filas retiradas
+en el benchmark de 10 categorías eran "sin dato", no "no cumple").
+
+**Contacto comprobado en el sitio antes de aprobar (`src/lib/contact-verify.ts`):** una fila solo
+queda válida si el correo o el móvil que dice el agente aparecen publicados en el sitio del negocio
+(portada y páginas de contacto). Se acepta también un buzón genérico del propio dominio con MX;
+nunca un buzón de RR. HH. o contabilidad, uno personal no publicado, ni uno de otro dominio. Si la
+fuente es un perfil en redes o un agregador, o el sitio bloquea robots, el contacto queda "no
+comprobado". La fila conserva sus datos y baja a revisión con el motivo (`contact_unverified`); al
+importar se vuelve a comprobar, porque el lote llega del navegador y pudo editarse. Auditado antes de
+existir este paso: el agente acertaba el contacto de forma comprobable en ~2 de cada 3 filas.
+`CURATION_SKIP_CONTACT_VERIFY=1` lo apaga solo en la curaduría (medición), nunca en la importación.
+
+Medido con este paso integrado (Cartagena, estándar 4.5/30, objetivo 10, Gemini, 2026-09-22):
+
+| Categoría | Escaneos | s | Filas | Aceptadas | Contacto confirmado en 2.ª lectura | Places |
+|---|---|---|---|---|---|---|
+| Comida y Bebida | 4 | 272 | 20 | 10 | 10/10 | 0 |
+| Fotografía y Video | 9 | 538 | 18 | 8 (la ciudad se agotó) | 8/8 | 0 |
+| Lugar | 3 | 251 | 20 | 10 | 10/10 | 0 |
+
+De las 30 filas en revisión: 19 sin calificación pública, 8 con contacto no comprobado (3 sitios
+que bloquean robots, 2 móviles distintos al publicado, 2 correos de otro dominio o personales, 1
+sitio caído) y 3 hoteles con solo teléfono fijo. Límite conocido: si el agente cita un portal como
+fuente (p. ej. cartagenadeindias.travel), el correo del portal pasa la comprobación.
+
+**Pista autodeclarada:** si el sitio del negocio publica `aggregateRating` en JSON-LD, la cifra se
+anota en la justificación como "Pista sin verificar". No toca las columnas de calificación: la fila
+sigue en revisión, pero quien revisa sabe dónde mirar.
+
+**Instagram ausente:** el validador acepta tanto "Sin Redes" como "Sin dato" en la columna
+Instagram. Gemini usa el segundo aunque el prompt pida el primero, y con la regla estricta tumbaba
+lotes enteros con reputación y contacto válidos (medido en producción el 2026-09-22: 10 de 10).
+
+### Google Places: apagado por defecto
+
+Google Maps renderiza su calificación con JavaScript y no la expone como texto rastreable, así que
+ningún prompt la consigue; la API oficial (Text Search) sí la devuelve estructurada
+(`src/lib/google-places.ts` para una fila concreta, `src/lib/places-harvest.ts` para cosechar una
+categoría). **Pero cuesta más de lo que decía este README.** Los campos que pide el código
+(`rating`, `userRatingCount`, `nationalPhoneNumber`, `websiteUri`) pertenecen al SKU **Text Search
+Enterprise**, y Google factura cada petición al SKU más alto de los campos solicitados. Precios
+verificados en la tabla oficial el 2026-09-22 (tramo 0–100k al mes):
+
+| SKU de Text Search | Campos que lo activan (los que usamos) | Gratis al mes | Después |
+|---|---|---|---|
+| Essentials (IDs only) | `places.id`, `nextPageToken` | 10.000 | sin cargo en este tramo |
+| Pro | `displayName`, `formattedAddress`, `businessStatus`, `primaryType`, `googleMapsUri` | 5.000 | USD 32 / 1.000 |
+| **Enterprise** | **`rating`, `userRatingCount`, `nationalPhoneNumber`, `websiteUri`** | **1.000** | **USD 35 / 1.000** |
+| Enterprise + Atmosphere | `reviews`, `editorialSummary`, … | 1.000 | USD 40 / 1.000 |
+
+No existe un SKU más barato que devuelva `rating`. Una búsqueda del panel podía lanzar hasta 10
+escaneos × 4 consultas de cosecha, más hasta 4 búsquedas por fila sin reputación: el cupo gratuito
+se agotaba en una tarde (incidente de 2026-09: ~150.000 COP en el proyecto `happia-provider-ia`).
+
+Por eso ahora toda petición a `places.googleapis.com` pasa por una única puerta
+(`src/lib/places-gate.ts`) y la clave, por sí sola, no activa nada:
+
+| Variable | Efecto |
+|---|---|
+| `GOOGLE_PLACES_API_KEY` | Necesaria, pero **no suficiente**. |
+| `GOOGLE_PLACES_OPT_IN=1` | Opt-in explícito. Sin él, cero peticiones aunque haya clave. |
+| `GOOGLE_PLACES_KILL_SWITCH=1` | Interruptor de emergencia: apaga todo, gana sobre el opt-in. |
+| `GOOGLE_PLACES_MAX_REQUESTS` | Tope duro de peticiones por proceso y día UTC (por defecto 50; un valor ilegible cierra la puerta). El contador vive en memoria y se reinicia con el proceso. |
+| `CURATION_DISABLE_PLACES=1` / `CURATION_DISABLE_HARVEST=1` | Interruptores de medición, como antes; solo tienen efecto si la puerta está abierta. |
+
+Cada intento se cuenta: `curation.places_request` cuando sale, `curation.places_request_blocked`
+(con el motivo) cuando no, y cada escaneo escribe `curation.places_mode` con el estado de la puerta.
+`GET /api/health` devuelve los contadores del día (`attempted`, `performed`, `blocked`,
+`blockedByReason`). `POST /api/providers/harvest` responde 503 con el motivo cuando la puerta está
+cerrada. El flujo normal de curaduría funciona sin Places: el agente descubre (Gemini lee la calificación de
+Google en sus resultados de búsqueda) y lo que no trae cifra queda en revisión.
+
+```bash
+# Benchmark sin Places (4 categorías fijas, comprueba que no salió ninguna petición)
+CURATION_PROVIDER=claude-code node --experimental-strip-types --import ./scripts/ts-resolver.mjs \
+  scripts/bench-no-places.ts "Barranquilla" 5 salida.json
+```
 
 La ficha de proveedor (`/proveedores/:id`) y la lista (`/proveedores`) muestran el desglose de
 reputación por plataforma leyendo `marketplace.provider_sources`, que guarda una fila por plataforma

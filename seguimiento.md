@@ -1194,3 +1194,85 @@ Con `Origin` puesto responde el 409 que corresponde.
 639f9cb feat: el panel cierra el círculo con clics y formularios por campaña
 587d4bf feat: el correo enrutado por el contador y el registro mueve al proveedor
 ```
+
+---
+
+## 34. Google Places: incidente de facturación y contención — 2026-09-22
+
+### Qué pasó
+
+Google Cloud facturó ~149.697 COP en el proyecto `happia-provider-ia`, SKU **Places API Text Search
+Enterprise**. La sección 24 y el README daban por hecho 5.000 llamadas gratis y ~USD 32/1.000: eso es el
+SKU **Pro**. Los campos que pide el `FieldMask` (`rating`, `userRatingCount`, `nationalPhoneNumber`,
+`websiteUri`) son Enterprise, Google factura al SKU más alto de los campos pedidos, y Enterprise regala
+1.000 eventos al mes y cobra USD 35/1.000 después (tabla oficial, verificada el 2026-09-22). No hay SKU
+más barato que devuelva `rating`. Una búsqueda del panel podía lanzar 10 escaneos × 4 consultas de
+cosecha más hasta 4 búsquedas por fila en "Sin dato", y la API se activaba con solo tener la clave.
+
+### Qué cambió
+
+- **Puerta única** `src/lib/places-gate.ts`: clave + `GOOGLE_PLACES_OPT_IN=1` + sin
+  `GOOGLE_PLACES_KILL_SWITCH=1` + presupuesto `GOOGLE_PLACES_MAX_REQUESTS` (50/día UTC por proceso por
+  defecto). Cuenta intentadas, realizadas y bloqueadas con motivo; lo expone `/api/health` y lo escribe
+  cada escaneo en `curation.places_mode`. Con clave y sin opt-in: cero peticiones (test
+  `scripts/places-gate.test.ts`).
+- **"Sin dato" ya no se descarta en el filtro de umbral**: se conserva como "Requiere revisión"
+  (`pending_reputation_review`), que el importador nunca acepta. Cierra el pendiente de la sección 30
+  (52 filas retiradas por ignorancia, no por juicio).
+- **Pista autodeclarada**: si el sitio del negocio publica `aggregateRating` en JSON-LD, se anota en la
+  justificación como "Pista sin verificar"; no toca las columnas de calificación.
+- `scripts/bench-no-places.ts`: benchmark con ciudad y categorías fijas que comprueba, con los
+  contadores de la puerta, que no salió ninguna petición.
+- **Hallazgo colateral, corregido:** Gemini escribe "Sin dato" en la columna Instagram aunque el
+  prompt pida "Sin Redes", y el validador tumbaba la fila entera por `invalid_instagram`. Medido con
+  la base de producción: 10 de 10 filas de Comida y Bebida con reputación y contacto válidos caían
+  por eso. Ahora "Sin dato" equivale a "Sin Redes" (`normalizeInstagram`, con test).
+
+### Alternativas evaluadas (2026-09-22)
+
+| Fuente | Reputación | Coste | Veredicto |
+|---|---|---|---|
+| Agente (Gemini `google_search` / Claude WebSearch) | A veces, en fragmentos | Ya se paga | Sigue siendo el descubridor |
+| Sitio oficial del negocio (scraper propio) | Solo autodeclarada (JSON-LD) | 0 | Correo, Instagram y pista |
+| Caché local (base propia) | Sí, ya verificada | 0 | Implementada y retirada a petición de David: la cifra debe verificarse en cada búsqueda |
+| OpenStreetMap / Overpass | No tiene reseñas | 0 (ODbL, 1 req/s, User-Agent) | Descubrimiento con teléfono/web; no resuelve reputación |
+| TripAdvisor Content API | Sí | — | Deprecada (migra a "Terra"); no viable |
+| Foursquare Places v2 | Parcial | USD 1–3/1.000, sin nivel gratuito | Dependencia paga: no sin aprobación |
+| Brave Search API | Fragmentos | USD 5 de crédito/mes (~1.000 consultas), USD 5/1.000 | Dependencia nueva: pendiente de aprobación |
+| Scraping de Maps / TripAdvisor / Facebook | Sí | 0 | Prohibido por términos: descartado |
+
+Conclusión honesta: sin Places no hay fuente gratuita y legal que devuelva la calificación de Google.
+El flujo conserva descubrimiento, contacto, evidencia y deduplicación; la cifra de reputación la
+trae el agente (Gemini la lee en sus resultados de búsqueda) o la confirma una persona en las filas
+"Requiere revisión".
+
+### Ajustes del 2026-09-22 (noche): el objetivo son negocios que cumplen
+
+- David pidió que una búsqueda con mínimo 3.5 y 30 en Cartagena devolviera 20 negocios con esa
+  configuración. No podía: el objetivo contaba filas (incluidas las de revisión) y el validador
+  tenía 4.5 fijo, así que un 4.0/1479 salía rechazado.
+- Ahora el umbral del operador llega a `parseCurationTsv` y a la importación (el panel lo manda),
+  `runCurationGoal` mide el objetivo en aceptados y sigue hasta lograrlo (12 escaneos, 3 seguidos
+  sin novedad), la consolidación pone primero los válidos, y la cuota por escaneo es dinámica
+  (lo que falta, entre 8 y 20). Tests en `curation-threshold.test.ts`.
+- Medido: Cartagena · Comida y Bebida · 3.5/30 · objetivo 20 → 20 válidos en 5 escaneos (294 s),
+  20 en revisión, 0 Places. Con la cuota fija anterior el primer escaneo traía 5 filas y 1 válida.
+- El registro local de reputación se retiró por decisión de David.
+
+### Verificación de contacto antes de aprobar — 2026-09-22 (noche)
+
+Auditoría a mano de los 20 válidos de Cartagena: contacto comprobable en el sitio en 12–13 de 20; 2
+buzones equivocados en el dominio correcto (hojas de vida, una persona), 3 móviles distintos al
+publicado, 3 correos de otro dominio sin ver. Respuesta: `contact-verify.ts` lee el sitio y exige el
+dato publicado; lo no confirmado baja a revisión con el motivo (`contact_unverified`) y se repite al
+importar. Test: `scripts/contact-verify.test.ts`. Medición con el paso integrado en la sección
+siguiente.
+
+### Medición con verificación integrada — 2026-09-22 (madrugada del 23)
+
+Cartagena, estándar 4.5/30, objetivo 10, Gemini: Comida y Bebida 10/10 en 4 escaneos (272 s);
+Fotografía y Video 8/10 en 9 escaneos (538 s, agotada); Lugar 10/10 en 3 (251 s). 58 filas, 28
+aceptadas (48 %), 28/28 con contacto confirmado en una segunda lectura independiente, 0 Places. En
+Lugar la verificación bajó 8 hoteles con cifra alta por contacto no comprobable: exactamente los
+casos que la auditoría manual había señalado. Cifras crudas en el cerebro
+(`notas/calidad-cartagena-2026-09-22.json`).
