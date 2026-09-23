@@ -44,7 +44,10 @@ export type CurationJob = {
 // segundo job para la misma ciudad/categoría y duplicar los procesos de WebSearch.
 const globalRegistry = globalThis as typeof globalThis & { __curationJobs?: Map<string, CurationJob> };
 const jobs: Map<string, CurationJob> = globalRegistry.__curationJobs ??= new Map<string, CurationJob>();
-const JOB_TTL_MS = 30 * 60 * 1000;
+// Un resultado terminado espera a que el panel vuelva a preguntar: si el equipo del operador se
+// suspendió a mitad de la búsqueda, puede tardar horas en volver, y el resultado ya pagado no debe
+// haberse borrado para entonces. Son pocos trabajos al día; la memoria no es el límite.
+const JOB_TTL_MS = 24 * 60 * 60 * 1000;
 
 function timestamp() {
   return new Date().toISOString();
