@@ -1276,3 +1276,30 @@ aceptadas (48 %), 28/28 con contacto confirmado en una segunda lectura independi
 Lugar la verificación bajó 8 hoteles con cifra alta por contacto no comprobable: exactamente los
 casos que la auditoría manual había señalado. Cifras crudas en el cerebro
 (`notas/calidad-cartagena-2026-09-22.json`).
+
+## 35. Subagentes de reputación (sin Places) — 2026-09-23
+
+### Qué pasaba
+
+Manizales · Menaje y mantelería en producción: 12 de 12 filas con calificación y reseñas en "Sin
+dato", aunque 8 tienen ficha en Google con reseñas. El agente de descubrimiento investiga 8–20
+negocios en un solo contexto y reparte sus búsquedas; el prompt de Gemini (español) no le exige una
+búsqueda de reputación por candidato. Prueba aislada: la misma herramienta `google_search`, dedicada
+a UN negocio con nombre, dirección y teléfono, sí ve la ficha (Alma: 5.0 con 16, igual que Maps).
+
+### Qué cambió
+
+- `src/lib/reputation-lookup.ts`: una llamada corta e independiente a Gemini por cada fila en
+  "Sin dato" (4 en paralelo, 120 s de tope). Solo acepta calificación 1–5, reseñas enteras ≥ 1,
+  una de las 6 plataformas admitidas y coincidencia de la ficha por teléfono, dirección o web (solo
+  por nombre no vale). Reescribe la fila con la misma forma que dejaba Places; lo no confirmado sigue
+  en "Requiere revisión". Corre solo con Places cerrado; `CURATION_SKIP_REPUTATION_SUBAGENTS=1` lo apaga.
+- `scripts/reputation-lookup.test.ts` (en `npm test`) y `scripts/bench-reputation.ts` (benchmark
+  contra cifras comprobadas a mano en Maps).
+
+### Medición (2 corridas, 12 casos de Manizales comprobados en Maps)
+
+Correctos 7 · "Sin dato" correcto (sin reseñas) 4 · omitido 1 (Alqui-Rimax, 4.8/4) · **inventados 0**
+· ~30 s en paralelo. El caso "Casa de Eventos G&M" se marcó primero como inventado (4.7/3) y era un
+error del caso de prueba: la ficha con ese teléfono y dirección está rotulada "Patty Bridal".
+Pendiente: confirmar el precio de las consultas de `google_search` (5–16 por subagente).

@@ -9,6 +9,7 @@ import { harvestedPlaceToRow } from './harvest-import';
 import { scrapeProviderContact, type ScrapedContact } from './contact-scrape';
 import { verifyBatchContacts } from './contact-verify';
 import { getPlacesUsage } from './places-gate';
+import { enrichMissingReputationWithSubagents } from './reputation-lookup';
 
 const GEMINI_INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const MAX_CURATION_CANDIDATES = 20;
@@ -1855,9 +1856,14 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
   const baseTsv = limitCurationTsvRows(normalizeKnownSourceUrls(rawTsv));
   const withFallbackCandidates = appendFallbackCandidates(baseTsv, discoveredCandidates, city, category, runContext);
   // Places solo si la puerta esta abierta (opt-in explicito, sin interruptor de emergencia y con presupuesto).
-  const enriched = placesEnabled
-    ? await enrichMissingReputationWithGooglePlaces(withFallbackCandidates, city, runContext)
-    : withFallbackCandidates;
+  // Sin Places, un subagente de Gemini por fila en "Sin dato" busca la ficha de ese negocio solo.
+  let enriched = withFallbackCandidates;
+  if (placesEnabled) {
+    enriched = await enrichMissingReputationWithGooglePlaces(withFallbackCandidates, city, runContext);
+  } else if (String(env('CURATION_SKIP_REPUTATION_SUBAGENTS') || '').trim() !== '1') {
+    input.onPhase?.('researching', 'Buscando la reputación de cada negocio por separado.', { current: 4, total: 4, label: 'Verificando reputación' });
+    enriched = await enrichMissingReputationWithSubagents(withFallbackCandidates, city, runContext);
+  }
   const filtered = filterByReputationThreshold(enriched, minRating, minReviews);
   // El agente manda: sus hallazgos van primero y el registro solo rellena lo que falte hasta el
   // objetivo. Sin esto el lote se quedaba en lo que el agente alcanzara, muy por debajo de los
