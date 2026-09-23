@@ -1303,3 +1303,19 @@ Correctos 7 · "Sin dato" correcto (sin reseñas) 4 · omitido 1 (Alqui-Rimax, 4
 · ~30 s en paralelo. El caso "Casa de Eventos G&M" se marcó primero como inventado (4.7/3) y era un
 error del caso de prueba: la ficha con ese teléfono y dirección está rotulada "Patty Bridal".
 Pendiente: confirmar el precio de las consultas de `google_search` (5–16 por subagente).
+
+### Corrección el mismo día: los subagentes no corrían en producción
+
+Primera búsqueda real tras el deploy (Bucaramanga · Entretenimiento, 20 filas): ningún evento
+`curation.reputation_subagents` en el log. `placesEnabled` en `curateProviders` solo indica que no se
+apagó Places por medición (`CURATION_DISABLE_PLACES`), no que la puerta esté abierta: se entraba a la
+rama de Places, que no hace nada con la puerta cerrada, y los subagentes nunca se llamaban. Ahora la
+rama de Places exige además `isGooglePlacesConfigured()`.
+
+La búsqueda no es determinista (Happy City Megamall, 4.3/69: 2 de 3 intentos idénticos), así que lo no
+encontrado se reintenta una vez (`CURATION_REPUTATION_ATTEMPTS`, 2 por defecto). Las mismas 20 filas de
+Bucaramanga, en local: 3 con cifra (Burbujitas 4.5/2, Divertypark 4.5/47, Happy City 4.3/69), el resto
+"Sin dato". Revisadas en Maps: la mayoría no tiene ficha propia con ese teléfono (perfiles solo de
+Facebook, o ficha sin reseñas); Fiesta Kids tiene 4.9/331 pero la ficha no publica teléfono y coincidir
+solo por nombre se rechaza a propósito. Manizales con reintento: 7 correctos, 4 sin dato correctos,
+1 omitido, 0 inventados.

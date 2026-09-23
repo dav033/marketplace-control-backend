@@ -100,8 +100,25 @@ export async function lookupReputation(target: ReputationTarget): Promise<Reputa
   return (await lookupReputationRaw(target)).finding;
 }
 
-/** Igual que `lookupReputation`, pero devuelve también la respuesta cruda (para el benchmark). */
-export async function lookupReputationRaw(target: ReputationTarget): Promise<{ finding?: ReputationFinding; raw?: string; error?: string }> {
+/**
+ * Igual que `lookupReputation`, pero devuelve también la respuesta cruda (para el benchmark).
+ *
+ * La búsqueda no es determinista: Happy City Megamall (4.3/69) salió en 2 de 3 intentos idénticos.
+ * Por eso lo no encontrado se reintenta (`CURATION_REPUTATION_ATTEMPTS`, 2 por defecto); lo
+ * encontrado no, así que el reintento solo cuesta en las filas que siguen en "Sin dato".
+ */
+export async function lookupReputationRaw(target: ReputationTarget): Promise<{ finding?: ReputationFinding; raw?: string; error?: string; attempts: number }> {
+  const configured = Number(env('CURATION_REPUTATION_ATTEMPTS') || 2);
+  const maxAttempts = Number.isInteger(configured) && configured >= 1 && configured <= 3 ? configured : 2;
+  let last: { finding?: ReputationFinding; raw?: string; error?: string } = {};
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    last = await singleLookup(target);
+    if (last.finding || last.error === 'GEMINI_NOT_CONFIGURED') return { ...last, attempts: attempt };
+  }
+  return { ...last, attempts: maxAttempts };
+}
+
+async function singleLookup(target: ReputationTarget): Promise<{ finding?: ReputationFinding; raw?: string; error?: string }> {
   const apiKey = env('GEMINI_API_KEY');
   if (!apiKey) return { error: 'GEMINI_NOT_CONFIGURED' };
   const controller = new AbortController();

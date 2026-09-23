@@ -1857,8 +1857,9 @@ Devuelve exactamente un objeto JSON con "tsv" y "research_summary". En "tsv" usa
   const withFallbackCandidates = appendFallbackCandidates(baseTsv, discoveredCandidates, city, category, runContext);
   // Places solo si la puerta esta abierta (opt-in explicito, sin interruptor de emergencia y con presupuesto).
   // Sin Places, un subagente de Gemini por fila en "Sin dato" busca la ficha de ese negocio solo.
+  // Ojo: `placesEnabled` solo dice que no se apagó por medición; la puerta es `isGooglePlacesConfigured`.
   let enriched = withFallbackCandidates;
-  if (placesEnabled) {
+  if (placesEnabled && isGooglePlacesConfigured()) {
     enriched = await enrichMissingReputationWithGooglePlaces(withFallbackCandidates, city, runContext);
   } else if (String(env('CURATION_SKIP_REPUTATION_SUBAGENTS') || '').trim() !== '1') {
     input.onPhase?.('researching', 'Buscando la reputación de cada negocio por separado.', { current: 4, total: 4, label: 'Verificando reputación' });
