@@ -1,4 +1,4 @@
-import { isWhatsappConfigured, resolveTestTarget, sendTemplate } from './whatsapp';
+import { fillTemplate, getTemplateInfo, isWhatsappConfigured, resolveTestTarget, sendTemplate } from './whatsapp';
 import { countOutreachToday, getConversation, isSuppressed, recordOutboundMessage, startConversation } from './whatsapp-store';
 import { stateFromProvider } from './conversation-runner';
 import { setProviderWhatsappStatus } from './data';
@@ -97,12 +97,14 @@ export async function startOutreach(
 
   if (await countOutreachToday() >= dailyLimit()) return { ok: false, reason: 'DAILY_LIMIT_REACHED' };
 
+  // Cada plantilla trae lo suyo: la de invitación lleva dos huecos (negocio y ciudad) y otras, como la
+  // de presentación, ninguno. Mandar parámetros de más hace que Meta rechace el envío entero, así que
+  // se manda solo los que la plantilla aprobada espera. Si no se puede consultar, se asumen los dos.
+  const templateInfo = await getTemplateInfo(templateName);
+  const parameters = [seed.displayName.trim(), seed.city ?? 'tu ciudad'].slice(0, templateInfo?.variables ?? 2);
   try {
     // En modo prueba se envía directo al teléfono de prueba elegido (`sendTemplate` lo respeta).
-    await sendTemplate(redirect ?? realTo, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', [
-      seed.displayName.trim(),
-      seed.city ?? 'tu ciudad',
-    ], { exact: Boolean(redirect) });
+    await sendTemplate(redirect ?? realTo, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', parameters, { exact: Boolean(redirect) });
   } catch (error) {
     console.error('whatsapp outreach failed', realTo, error instanceof Error ? error.message : error);
     return { ok: false, reason: 'SEND_FAILED' };
@@ -110,7 +112,9 @@ export async function startOutreach(
 
   // La conversación queda preparada con los datos del candidato y con lo que le dijimos: cuando
   // conteste, el agente sabe a quién le escribió y qué le propuso.
-  const transcript = outreachTranscript(seed);
+  // Con la plantilla en mano se guarda su texto real, no el de la invitación: el agente tiene que saber
+  // qué le dijimos de verdad al proveedor.
+  const transcript = templateInfo ? fillTemplate(templateInfo.body, parameters) : outreachTranscript(seed);
   const status = { status: 'mensaje_enviado' as const, reason: redirect ? `Modo prueba: enviado a +${redirect}` : null };
   await startConversation(to, seed, {
     ...stateFromProvider(seed, transcript),
