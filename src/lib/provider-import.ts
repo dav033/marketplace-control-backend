@@ -28,12 +28,17 @@ export function rejectedCurationRows(rows: ReturnType<typeof validateCurationBat
 /**
  * El umbral es el de la búsqueda que produjo el lote: si el operador pidió 3.5 y 30, un negocio de
  * 4.0 con 40 reseñas tiene que poder importarse. Sin umbral se aplica el estándar (4.5 y 30).
+ *
+ * El contacto NO se vuelve a leer del sitio aquí. La curación ya lo comprobó y dejó en el lote el
+ * marcador `[Contacto no comprobado: ...]` en lo que no pudo confirmar; el validador lo rechaza.
+ * Repetir la verificación estricta (móvil publicado en el sitio) tumbaba lotes enteros de la
+ * curación por Maps: el móvil sale de la ficha, la fuente suele ser Maps o Instagram y el sitio no
+ * lo repite, así que todas las filas bajaban a revisión y no se importaba nada. Quien quiera la
+ * comprobación extra la pide con `verifyContacts: true`.
  */
 export async function importCurationTsv(raw: string, threshold?: Partial<CurationThreshold> | null, options: { verifyContacts?: boolean } = {}): Promise<{ status: number; body: CurationImportResult }> {
   const effectiveThreshold = normalizeCurationThreshold(threshold);
-  // Se vuelve a leer el sitio al importar: el lote llega del navegador y pudo editarse a mano.
-  // Lo que no se confirma no entra, aunque la vista previa lo diera por valido.
-  const verified = options.verifyContacts === false ? raw : (await verifyBatchContacts(raw, effectiveThreshold)).tsv;
+  const verified = options.verifyContacts === true ? (await verifyBatchContacts(raw, effectiveThreshold)).tsv : raw;
   const parsed = parseCurationTsv(verified, effectiveThreshold);
   if (parsed.fatalErrors.length > 0) {
     return {
