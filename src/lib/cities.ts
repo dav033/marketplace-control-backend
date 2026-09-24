@@ -259,7 +259,7 @@ export async function announceCity(
     const transcript = announcementTranscript(target.displayName, plan.city.name, templateInfo);
     const parametros = [target.displayName, plan.city.name].slice(0, templateInfo?.variables ?? 2);
     try {
-      await sendTemplate(redirect ?? target.phone!, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', parametros, { exact: Boolean(redirect) });
+      await sendTemplate(redirect ?? target.phone!, templateName, templateInfo?.language ?? (env('WHATSAPP_OUTREACH_LANGUAGE') || 'es'), parametros, { exact: Boolean(redirect) });
     } catch (error) {
       console.error('anuncio de ciudad falló', target.providerId, error instanceof Error ? error.message : error);
       await recordAnnouncement(cityId, target.providerId, 'whatsapp', 'failed', 'SEND_FAILED');

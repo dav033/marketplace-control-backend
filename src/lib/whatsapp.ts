@@ -161,14 +161,16 @@ function deliverTo(to: string) {
 
 
 /**
- * La plantilla tal como está aprobada en Meta: su texto y cuántas variables espera.
+ * La plantilla tal como está aprobada en Meta: su texto, cuántas variables espera y en qué idioma.
  *
  * Se consulta en vez de darla por supuesta porque cada plantilla tiene lo suyo: la de invitación
  * lleva dos huecos (negocio y ciudad) y la de apertura de ciudad puede no llevar ninguno. Mandar
- * parámetros de más hace que Meta rechace el envío entero. Se guarda en memoria un rato: cambia
+ * parámetros de más hace que Meta rechace el envío entero. El idioma también sale de aquí: Meta
+ * busca la plantilla por nombre e idioma, y hay plantillas en español registradas como `en` o
+ * `es_CO`; pedirla en otro idioma da "plantilla no encontrada". Se guarda en memoria un rato: cambia
  * pocas veces y no vale la pena consultarla en cada mensaje.
  */
-type TemplateInfo = { body: string; variables: number };
+type TemplateInfo = { body: string; variables: number; language: string };
 const templateCache = new Map<string, { info: TemplateInfo | null; at: number }>();
 const TEMPLATE_TTL_MS = 10 * 60 * 1000;
 
@@ -184,12 +186,15 @@ export async function getTemplateInfo(name: string): Promise<TemplateInfo | null
   try {
     const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION()}/${waba}/message_templates`);
     url.searchParams.set('name', name);
-    url.searchParams.set('fields', 'name,status,components');
+    url.searchParams.set('fields', 'name,status,language,components');
     const response = await fetch(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) });
-    const payload = await response.json() as { data?: Array<{ name: string; status: string; components?: Array<{ type: string; text?: string }> }> };
-    const plantilla = payload.data?.find((item) => item.name === name && item.status === 'APPROVED');
+    const payload = await response.json() as { data?: Array<{ name: string; status: string; language: string; components?: Array<{ type: string; text?: string }> }> };
+    // Si está aprobada en varios idiomas, manda el configurado; si no, el único que tenga.
+    const aprobadas = payload.data?.filter((item) => item.name === name && item.status === 'APPROVED') ?? [];
+    const preferido = env('WHATSAPP_OUTREACH_LANGUAGE') || 'es';
+    const plantilla = aprobadas.find((item) => item.language === preferido) ?? aprobadas[0];
     const body = plantilla?.components?.find((component) => component.type === 'BODY')?.text;
-    if (body) info = { body, variables: new Set([...body.matchAll(/\{\{(\d+)\}\}/g)].map((match) => match[1])).size };
+    if (plantilla && body) info = { body, variables: new Set([...body.matchAll(/\{\{(\d+)\}\}/g)].map((match) => match[1])).size, language: plantilla.language };
   } catch (error) {
     console.error('no se pudo leer la plantilla', name, error instanceof Error ? error.message : error);
   }

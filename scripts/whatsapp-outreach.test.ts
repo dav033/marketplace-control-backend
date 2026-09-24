@@ -66,18 +66,19 @@ assert.equal(await isSuppressed('573109999999'), true);
 const suprimido = await startOutreach({ ...candidato, providerId: 'otro', phone: '+57 310 9999999' });
 assert.deepEqual(suprimido, { ok: false, reason: 'SUPPRESSED' }, 'la supresion manda sobre todo lo demas');
 
-// --- La plantilla manda: sin variables no se mandan parámetros, y se guarda su texto real ---
+// --- La plantilla manda: sin variables no se mandan parámetros, se envía en el idioma con que está
+// aprobada (aunque el configurado sea otro) y se guarda su texto real ---
 {
   process.env.WHATSAPP_BUSINESS_ACCOUNT_ID = 'waba-prueba';
   process.env.WHATSAPP_OUTREACH_TEMPLATE = 'somos_happia_prueba';
-  process.env.WHATSAPP_OUTREACH_LANGUAGE = 'en';
+  process.env.WHATSAPP_OUTREACH_LANGUAGE = 'es';
   const texto = 'Hola 😊 ¡Mucho gusto! Somos Happia by Sempertex.';
   const enviados: Array<Record<string, any>> = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.includes('/message_templates')) {
-      return new Response(JSON.stringify({ data: [{ name: 'somos_happia_prueba', status: 'APPROVED', components: [{ type: 'BODY', text: texto }] }] }), { status: 200 });
+      return new Response(JSON.stringify({ data: [{ name: 'somos_happia_prueba', status: 'APPROVED', language: 'en', components: [{ type: 'BODY', text: texto }] }] }), { status: 200 });
     }
     enviados.push(JSON.parse(String(init?.body ?? '{}')));
     return new Response(JSON.stringify({ messages: [{ id: 'wamid.1' }] }), { status: 200 });
@@ -88,7 +89,7 @@ assert.deepEqual(suprimido, { ok: false, reason: 'SUPPRESSED' }, 'la supresion m
     assert.equal(resultado.ok, true, 'una plantilla sin variables se envía');
     assert.equal(enviados.length, 1);
     assert.equal(enviados[0].template.name, 'somos_happia_prueba');
-    assert.equal(enviados[0].template.language.code, 'en');
+    assert.equal(enviados[0].template.language.code, 'en', 'el idioma aprobado en Meta, no el configurado');
     assert.equal(enviados[0].template.components, undefined, 'sin variables no van parámetros');
     const conversacion = await getConversation('573111112233');
     assert.match(JSON.stringify(conversacion?.state.history ?? []), /Mucho gusto/, 'la conversación guarda el texto real de la plantilla');

@@ -104,7 +104,7 @@ export async function startOutreach(
   const parameters = [seed.displayName.trim(), seed.city ?? 'tu ciudad'].slice(0, templateInfo?.variables ?? 2);
   try {
     // En modo prueba se envía directo al teléfono de prueba elegido (`sendTemplate` lo respeta).
-    await sendTemplate(redirect ?? realTo, templateName, env('WHATSAPP_OUTREACH_LANGUAGE') || 'es', parameters, { exact: Boolean(redirect) });
+    await sendTemplate(redirect ?? realTo, templateName, templateInfo?.language ?? (env('WHATSAPP_OUTREACH_LANGUAGE') || 'es'), parameters, { exact: Boolean(redirect) });
   } catch (error) {
     console.error('whatsapp outreach failed', realTo, error instanceof Error ? error.message : error);
     return { ok: false, reason: 'SEND_FAILED' };
