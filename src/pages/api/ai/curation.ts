@@ -1,8 +1,9 @@
 import type { APIRoute } from 'astro';
 import { runCurationGoal } from '../../../lib/curation-run';
 import { importCurationTsv } from '../../../lib/provider-import';
-import { completeCurationJob, createCurationJob, failCurationJob, getCurationJob, getRunningCurationJob, updateCurationJob } from '../../../lib/curation-job';
+import { cancelCurationJob, completeCurationJob, createCurationJob, failCurationJob, getCurationJob, getRunningCurationJob, isCurationCancelled, updateCurationJob } from '../../../lib/curation-job';
 import { neutralizeAgentText } from '../../../lib/agent-identity';
+import { killJobChildren } from '../../../lib/gemini';
 
 function json(body: unknown, status = 200) {
   // Con longitud declarada. Sin ella la respuesta sale troceada y sin final claro, y al arrancar la
@@ -41,7 +42,7 @@ function jobPayload(job: ReturnType<typeof getCurationJob>) {
     // La vista previa también viaja cuando el job falla: los proveedores ya encontrados se muestran.
     ...(job.status !== 'completed' && job.preview ? { preview: job.preview } : {}),
     ...(job.status === 'completed' ? job.result : {}),
-    ...(job.status === 'failed' ? { error: neutralizeAgentText(job.error ?? '') } : {}),
+    ...(job.status === 'failed' ? { error: neutralizeAgentText(job.error ?? ''), ...(job.cancelled ? { cancelled: true } : {}) } : {}),
   };
 }
 
@@ -71,6 +72,16 @@ export const POST: APIRoute = async ({ request }) => {
     payload = await request.json() as Record<string, unknown>;
   } catch {
     return json({ ok: false, error: 'El cuerpo de la solicitud no es JSON válido.' }, 400);
+  }
+
+  if (payload.action === 'cancel') {
+    const jobId = typeof payload.jobId === 'string' ? payload.jobId : typeof payload.job_id === 'string' ? payload.job_id : '';
+    const job = jobId ? getCurationJob(jobId) : undefined;
+    if (!job) return json({ ok: false, error: 'La búsqueda ya no está disponible.' }, 404);
+    // Primero se marca y luego se mata: cuando el agente muere y su escaneo falla, el bucle ya ve
+    // que fue una cancelación y no reintenta.
+    if (cancelCurationJob(jobId)) killJobChildren(jobId);
+    return json(jobPayload(job));
   }
 
   if (payload.action === 'import') {
@@ -111,6 +122,7 @@ export const POST: APIRoute = async ({ request }) => {
         minReviews,
         targetCount,
         jobId: job.jobId,
+        isCancelled: () => isCurationCancelled(job.jobId),
         onPhase: (phase, detail, progress, preview) => updateCurationJob(job.jobId, phase, detail, progress, preview),
       });
       const { acceptedRows: _acceptedRows, discoveredCandidates: _discoveredCandidates, ...publicResult } = result;

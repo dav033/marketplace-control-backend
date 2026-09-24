@@ -15,6 +15,7 @@ function discoversWithSerper(): boolean {
   return String(env('CURATION_PROVIDER') || '').trim().toLowerCase() === 'serper';
 }
 
+export const CURATION_CANCELLED = 'CURATION_CANCELLED';
 const MAX_SCAN_ATTEMPTS = 12;
 const MAX_CONSECUTIVE_FAILURES = 3;
 /** Escaneos seguidos sin un solo negocio nuevo que cumpla el mínimo antes de dar la ciudad por agotada. */
@@ -100,6 +101,8 @@ export async function runCurationGoal(input: {
   minRating?: number;
   minReviews?: number;
   onPhase?: CurationPhaseReporter;
+  /** Se consulta entre pasos: si devuelve true la corrida se corta sin lanzar nada más. */
+  isCancelled?: () => boolean;
 }): Promise<GeminiCurationResult> {
   const targetCount = Math.max(1, Math.min(100, Math.trunc(input.targetCount)));
   const contactTarget = Math.min(15, targetCount);
@@ -116,7 +119,10 @@ export async function runCurationGoal(input: {
   let lastError = '';
   let consecutiveFailures = 0;
 
+  const stopIfCancelled = () => { if (input.isCancelled?.()) throw new Error(CURATION_CANCELLED); };
+
   for (let attempt = 1; attempt <= MAX_SCAN_ATTEMPTS; attempt += 1) {
+    stopIfCancelled();
     attemptsUsed = attempt;
     const remaining = Math.max(targetCount - previousAccepted, 0);
     const iterationInstructions = [
@@ -142,6 +148,8 @@ export async function runCurationGoal(input: {
         onPhase: (phase, detail, progress, preview) => input.onPhase?.(phase, `Escaneo ${attempt}: ${detail}`, progress, preview),
       });
     } catch (error) {
+      // Matar al agente hace fallar el escaneo: eso no es un fallo, es la cancelación.
+      stopIfCancelled();
       lastError = error instanceof Error ? error.message : 'El agente no devolvió un lote válido.';
       consecutiveFailures += 1;
       logCurationEvent('scan_failed', { jobId: input.jobId ?? 'sin-job', scanNumber: attempt, consecutiveFailures, reason: lastError });
@@ -150,6 +158,7 @@ export async function runCurationGoal(input: {
       stoppedReason = 'agent_failed';
       break;
     }
+    stopIfCancelled();
     consecutiveFailures = 0;
     // El lote entra al acumulado ANTES de intentar guardarlo: si la base de datos falla, los
     // proveedores ya encontrados no se pierden.

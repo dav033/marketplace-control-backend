@@ -32,6 +32,8 @@ export type CurationJob = {
   result?: GeminiCurationResult;
   preview?: CurationLivePreview;
   error?: string;
+  /** El operador la canceló: el job queda como `failed`, con la vista previa que llevara hasta ese momento. */
+  cancelled?: boolean;
   createdAt: string;
   updatedAt: string;
   finishedAt?: string;
@@ -124,7 +126,7 @@ export function updateCurationJob(jobId: string, phase: Exclude<CurationPhaseKey
 
 export function completeCurationJob(jobId: string, result: GeminiCurationResult) {
   const job = jobs.get(jobId);
-  if (!job) return;
+  if (!job || job.cancelled) return;
   const now = timestamp();
   job.phases = job.phases.map(item => ({
     ...item,
@@ -143,7 +145,7 @@ export function completeCurationJob(jobId: string, result: GeminiCurationResult)
 
 export function failCurationJob(jobId: string, error: string) {
   const job = jobs.get(jobId);
-  if (!job) return;
+  if (!job || job.cancelled) return;
   const now = timestamp();
   job.phases = job.phases.map(item => item.key === job.phase
     ? { ...item, state: 'error', detail: 'La fase no pudo completarse.', finishedAt: now }
@@ -154,6 +156,32 @@ export function failCurationJob(jobId: string, error: string) {
   job.updatedAt = now;
   // `job.preview` se conserva a propósito: aunque la búsqueda falle, los proveedores ya encontrados
   // deben seguir visibles en la interfaz.
+}
+
+export const CURATION_CANCELLED_MESSAGE = 'Búsqueda cancelada.';
+
+/**
+ * Cancela un job en curso. Se marca al instante y quien llama mata después los procesos del agente
+ * (`killJobChildren`), así que el panel lo ve terminado en el siguiente sondeo sin esperar a que el
+ * agente acabe su turno. Devuelve false si no existe o ya había terminado.
+ */
+export function cancelCurationJob(jobId: string): boolean {
+  const job = jobs.get(jobId);
+  if (!job || job.status !== 'running') return false;
+  const now = timestamp();
+  job.phases = job.phases.map(item => item.key === job.phase
+    ? { ...item, state: 'error', detail: CURATION_CANCELLED_MESSAGE, finishedAt: now }
+    : item);
+  job.cancelled = true;
+  job.status = 'failed';
+  job.error = CURATION_CANCELLED_MESSAGE;
+  job.finishedAt = now;
+  job.updatedAt = now;
+  return true;
+}
+
+export function isCurationCancelled(jobId: string | undefined): boolean {
+  return Boolean(jobId && jobs.get(jobId)?.cancelled);
 }
 
 export function getCurationJob(jobId: string) {

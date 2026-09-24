@@ -134,6 +134,8 @@ export function isInformationalStderr(stderr: string): boolean {
 
 /** Procesos vivos: garantiza que ningún timeout deje un claude huérfano. */
 const activeClaudeChildren = new Set<ChildProcess>();
+/** A qué búsqueda pertenece cada proceso, para poder cancelar una sin tocar las demás. */
+const childJobs = new WeakMap<ChildProcess, string>();
 let exitHooksInstalled = false;
 
 function killClaudeTree(child: ChildProcess) {
@@ -154,6 +156,18 @@ export function killAllClaudeChildren(): number {
   const count = activeClaudeChildren.size;
   for (const child of activeClaudeChildren) killClaudeTree(child);
   activeClaudeChildren.clear();
+  return count;
+}
+
+/** Mata al instante los procesos del agente de una búsqueda. Devuelve cuántos había vivos. */
+export function killJobChildren(jobId: string): number {
+  let count = 0;
+  for (const child of [...activeClaudeChildren]) {
+    if (childJobs.get(child) !== jobId) continue;
+    killClaudeTree(child);
+    activeClaudeChildren.delete(child);
+    count += 1;
+  }
   return count;
 }
 
@@ -236,6 +250,7 @@ export function runClaudeCode(options: ClaudeRunOptions): Promise<ClaudeRunResul
     // cuando el servidor está ocupado, el CLI alcanza a emitir "no stdin data received in 3s".
     const child = spawn(command, args, { cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     activeClaudeChildren.add(child);
+    childJobs.set(child, options.context.jobId);
 
     let stdoutBuffer = '';
     let stdoutBytes = 0;
@@ -514,6 +529,7 @@ export function runCodexCli(options: ClaudeRunOptions): Promise<ClaudeRunResult>
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     activeClaudeChildren.add(child);
+    childJobs.set(child, options.context.jobId);
     child.stdin.write(prompt);
     child.stdin.end();
 
