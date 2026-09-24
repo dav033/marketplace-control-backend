@@ -77,9 +77,9 @@ export function toInstagramHandle(rawUrl: string | undefined): string | undefine
   return `@${profile}`;
 }
 
+/** Fecha de hoy (AAAA-MM-DD) en Colombia: el servidor corre en UTC y de 7 p. m. en adelante ya sería mañana. */
 function todayIso(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(new Date());
 }
 
 export type HarvestRowOptions = {
