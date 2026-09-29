@@ -38,6 +38,8 @@ export const GET: APIRoute = async () => {
     prestado: cupo.borrowed,
     topeDia: cupo.burstLimit,
     semana: { limite: cupo.weeklyLimit, enviados: cupo.sentThisWeek, disponibles: cupo.weeklyRemaining },
+    // Presente solo si el cupo se puso a cero a mano: lo de antes de esta fecha no cuenta.
+    desde: cupo.countingSince ?? null,
     configurado: isWhatsappConfigured(),
     plantilla: env('WHATSAPP_OUTREACH_TEMPLATE') || null,
     redirigidoA: redirectTarget(),

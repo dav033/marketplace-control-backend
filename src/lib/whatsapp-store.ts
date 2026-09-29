@@ -175,14 +175,20 @@ export async function suppress(waId: string, reason: string, source: string): Pr
  *
  * Las dos ventanas salen de una sola consulta porque el cupo las mira siempre juntas, una vez por
  * envío: el día es el ritmo y la semana es el presupuesto del que ese día puede tomar prestado.
+ *
+ * `since` deja fuera de la cuenta lo enviado antes de ese instante. Es lo que permite empezar de
+ * cero sin borrar nada: `whatsapp_sent_at` sigue diciendo cuándo salió cada invitación —lo necesita
+ * el historial del proveedor—, y lo único que cambia es desde dónde cuenta el cupo.
  */
-export async function countOutreachWindows(): Promise<{ day: number; week: number }> {
+export async function countOutreachWindows(since?: Date): Promise<{ day: number; week: number }> {
   if (!pool) return { day: 0, week: 0 };
   const result = await query<{ day: number; week: number }>(
     `SELECT (count(*) FILTER (WHERE whatsapp_sent_at >= now() - interval '24 hours'))::int AS day,
             count(*)::int AS week
        FROM marketplace.providers
-      WHERE whatsapp_sent_at >= now() - interval '7 days'`,
+      WHERE whatsapp_sent_at >= now() - interval '7 days'
+        AND ($1::timestamptz IS NULL OR whatsapp_sent_at >= $1)`,
+    [since ?? null],
   );
   return { day: result.rows[0]?.day ?? 0, week: result.rows[0]?.week ?? 0 };
 }

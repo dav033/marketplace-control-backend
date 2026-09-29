@@ -101,6 +101,24 @@ export function dailyBurstLimit(): number {
   return Math.min(weeklyLimit(), Math.max(dailyLimit(), configured));
 }
 
+/**
+ * Desde cuándo cuenta el cupo. Sin valor, cuenta todo lo que caiga en las dos ventanas.
+ *
+ * Existe para poder empezar de cero —subir el ritmo y no arrastrar lo que ya salió con el anterior—
+ * sin borrar `whatsapp_sent_at`, que es el historial de cuándo se contactó a cada proveedor. Se
+ * apaga solo: pasados 7 días queda por detrás de las dos ventanas y deja de restar nada.
+ *
+ * Un valor ilegible o en el futuro se ignora. Este es el único ajuste del cupo que lo ENSANCHA, así
+ * que equivocarse aquí tiene que contar de más, nunca de menos.
+ */
+export function quotaEpoch(): Date | undefined {
+  const raw = String(env('WHATSAPP_QUOTA_EPOCH') ?? '').trim();
+  if (!raw) return undefined;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime()) || parsed.getTime() > Date.now()) return undefined;
+  return parsed;
+}
+
 export type OutreachBlockReason = 'DAILY_LIMIT_REACHED' | 'WEEKLY_LIMIT_REACHED';
 
 export type OutreachAllowance = {
@@ -121,6 +139,8 @@ export type OutreachAllowance = {
   exhaustedReason: OutreachBlockReason;
   /** Solo cuando ya no cabe ni un envío más. */
   blocked?: OutreachBlockReason;
+  /** Desde cuándo cuenta, si se puso a cero a mano. Sin esto, cuentan las dos ventanas enteras. */
+  countingSince?: string;
 };
 
 /**
@@ -156,11 +176,15 @@ export function computeAllowance(input: {
 
 /** El cupo ahora mismo: lo enviado en 24 horas y en 7 días, contra los tres topes. */
 export async function outreachAllowance(): Promise<OutreachAllowance> {
-  const { day, week } = await countOutreachWindows();
-  return computeAllowance({
-    sentToday: day, sentThisWeek: week,
-    daily: dailyLimit(), weekly: weeklyLimit(), burst: dailyBurstLimit(),
-  });
+  const epoch = quotaEpoch();
+  const { day, week } = await countOutreachWindows(epoch);
+  return {
+    ...(epoch ? { countingSince: epoch.toISOString() } : {}),
+    ...computeAllowance({
+      sentToday: day, sentThisWeek: week,
+      daily: dailyLimit(), weekly: weeklyLimit(), burst: dailyBurstLimit(),
+    }),
+  };
 }
 
 export async function startOutreach(

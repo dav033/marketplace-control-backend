@@ -126,6 +126,7 @@ el cupo tiene tres topes, cada uno con un trabajo distinto:
 | `WHATSAPP_DAILY_OUTREACH_LIMIT` | 30 | **El ritmo**: lo que sale en 24 h sin tocar el pool. |
 | `WHATSAPP_WEEKLY_OUTREACH_LIMIT` | 7 × el diario (210) | **El presupuesto**: nada puede pasarse de aquí. |
 | `WHATSAPP_DAILY_OUTREACH_BURST` | 2 × el diario (60) | **El techo de un día** tomando prestado del pool. |
+| `WHATSAPP_QUOTA_EPOCH` | sin valor | **Desde cuándo cuenta.** Lo enviado antes de ese instante no resta. |
 
 Un día puede pasarse del ritmo mientras quede pool, hasta el techo: así un día con muchos candidatos
 listos recupera lo que no se envió en los días flojos — eso es "tomar prestado". El techo existe para
@@ -136,7 +137,16 @@ presupuesto semanal.
 
 Las dos ventanas son **móviles** —últimas 24 h y últimos 7 días, contadas sobre
 `providers.whatsapp_sent_at`—, así que el pool se recupera solo y no hay día de reinicio en el que se
-pierda lo no usado. Un envío rechazado por cupo devuelve `DAILY_LIMIT_REACHED` (se puede reintentar
+pierda lo no usado.
+
+Eso también quiere decir que **subir el ritmo no borra lo ya enviado**: los envíos del ritmo anterior
+siguen restando hasta que la ventana pase por encima de ellos. Para empezar de cero se pone
+`WHATSAPP_QUOTA_EPOCH` con un instante ISO-8601 (`2026-09-29T14:30:00Z`) y lo anterior deja de contar.
+No borra nada: `whatsapp_sent_at` sigue siendo el historial de cuándo se contactó a cada proveedor, y
+lo único que cambia es desde dónde cuenta el cupo. Se apaga solo — pasados 7 días queda por detrás de
+las dos ventanas y deja de restar. Un valor ilegible o en el futuro se ignora: es el único ajuste que
+ensancha el cupo, así que equivocarse tiene que contar de más. Mientras esté activo,
+`GET /api/whatsapp/outreach` lo devuelve en `desde` y el panel lo dice en el tooltip del cupo. Un envío rechazado por cupo devuelve `DAILY_LIMIT_REACHED` (se puede reintentar
 mañana) o `WEEKLY_LIMIT_REACHED` (hay que esperar a que la ventana corra). `GET /api/whatsapp/outreach`
 devuelve el desglose que pinta el panel: `disponibles` es lo que se puede enviar ahora mismo, partido
 en `base` (del ritmo) y `prestado` (del pool), más `semana` con el estado del presupuesto. La

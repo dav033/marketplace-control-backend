@@ -3,7 +3,7 @@
 // Sin base de datos ni red: la aritmética se prueba sola, que es justo lo que hay que poder repasar
 // antes de mandar mensajes que no se pueden deshacer.
 import assert from 'node:assert/strict';
-import { computeAllowance, dailyBurstLimit, dailyLimit, weeklyLimit } from '../src/lib/whatsapp-outreach.ts';
+import { computeAllowance, dailyBurstLimit, dailyLimit, quotaEpoch, weeklyLimit } from '../src/lib/whatsapp-outreach.ts';
 
 const cupo = (sentToday: number, sentThisWeek: number, topes = { daily: 30, weekly: 210, burst: 60 }) =>
   computeAllowance({ sentToday, sentThisWeek, ...topes });
@@ -110,5 +110,20 @@ for (let enviadosHoy = 0; enviadosHoy <= 70; enviadosHoy += 5) {
   assert.equal(hoy.available, 10);
   assert.equal(hoy.exhaustedReason, 'WEEKLY_LIMIT_REACHED');
 }
+
+// --- Desde cuándo cuenta: el único ajuste que ENSANCHA el cupo, así que falla hacia contar de más ---
+delete process.env.WHATSAPP_QUOTA_EPOCH;
+assert.equal(quotaEpoch(), undefined, 'sin valor, cuentan las dos ventanas enteras');
+
+process.env.WHATSAPP_QUOTA_EPOCH = '2026-09-01T10:00:00Z';
+assert.equal(quotaEpoch()?.toISOString(), '2026-09-01T10:00:00.000Z', 'un instante pasado se respeta');
+
+process.env.WHATSAPP_QUOTA_EPOCH = 'el lunes pasado';
+assert.equal(quotaEpoch(), undefined, 'ilegible: se ignora y se cuenta todo');
+process.env.WHATSAPP_QUOTA_EPOCH = '   ';
+assert.equal(quotaEpoch(), undefined, 'en blanco: se ignora');
+process.env.WHATSAPP_QUOTA_EPOCH = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+assert.equal(quotaEpoch(), undefined, 'en el futuro dejaría el cupo abierto para siempre: se ignora');
+delete process.env.WHATSAPP_QUOTA_EPOCH;
 
 console.log('whatsapp quota tests passed');
