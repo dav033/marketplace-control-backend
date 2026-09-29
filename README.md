@@ -105,14 +105,43 @@ interesa" en una simulación no bloquea el número.
 
 Desde la tabla de proveedores se eligen uno, varios, los visibles o los primeros 10 y se les manda
 la plantilla aprobada (`WHATSAPP_OUTREACH_TEMPLATE`, hoy `invitacion_happia_2`) por
-`POST /api/whatsapp/outreach` (tandas de 50, cupo diario `WHATSAPP_DAILY_OUTREACH_LIMIT`, detrás del
-Basic Auth del panel). Cada proveedor guarda en `providers.whatsapp_status` en qué punto está:
+`POST /api/whatsapp/outreach` (tandas de 50, detrás del Basic Auth del panel y respetando el cupo).
+Cada proveedor guarda en `providers.whatsapp_status` en qué punto está:
 
 `mensaje_enviado` → `conversacion_iniciada` (contestó) → `conversacion_aceptada` (mostró interés) →
 `inscrito`; o `conversacion_rechazada` (dijo que no antes de aceptar conversar) y `rechazado` (aceptó
 conversar pero no la inscripción, o comportamiento inadecuado). Lo clasifica el agente con sus
 herramientas y las transiciones las decide `src/lib/conversation-status.ts`; cada cambio queda en
 `audit_log` (`whatsapp.status_changed`).
+
+### El cupo de invitaciones: ritmo diario y pool semanal
+
+Meta sube o baja el cupo de una cuenta según su calidad, y la calidad baja cuando la gente bloquea o
+reporta: gastarlo de golpe el primer día es la forma rápida de que lo recorten. Pero un número fijo
+por día desperdicia la semana, porque los días sin candidatos listos no se recuperan nunca. Por eso
+el cupo tiene tres topes, cada uno con un trabajo distinto:
+
+| Variable | Por defecto | Qué hace |
+|---|---|---|
+| `WHATSAPP_DAILY_OUTREACH_LIMIT` | 30 | **El ritmo**: lo que sale en 24 h sin tocar el pool. |
+| `WHATSAPP_WEEKLY_OUTREACH_LIMIT` | 7 × el diario (210) | **El presupuesto**: nada puede pasarse de aquí. |
+| `WHATSAPP_DAILY_OUTREACH_BURST` | 2 × el diario (60) | **El techo de un día** tomando prestado del pool. |
+
+Un día puede pasarse del ritmo mientras quede pool, hasta el techo: así un día con muchos candidatos
+listos recupera lo que no se envió en los días flojos — eso es "tomar prestado". El techo existe para
+que un día con el pool intacto no dispare la semana entera de una sentada, que es justo lo que hunde
+la calidad de la cuenta. Un valor ilegible en cualquiera de las tres no ensancha el cupo: se cae al
+de respaldo; y el techo se recorta solo para no quedar por debajo del ritmo ni por encima del
+presupuesto semanal.
+
+Las dos ventanas son **móviles** —últimas 24 h y últimos 7 días, contadas sobre
+`providers.whatsapp_sent_at`—, así que el pool se recupera solo y no hay día de reinicio en el que se
+pierda lo no usado. Un envío rechazado por cupo devuelve `DAILY_LIMIT_REACHED` (se puede reintentar
+mañana) o `WEEKLY_LIMIT_REACHED` (hay que esperar a que la ventana corra). `GET /api/whatsapp/outreach`
+devuelve el desglose que pinta el panel: `disponibles` es lo que se puede enviar ahora mismo, partido
+en `base` (del ritmo) y `prestado` (del pool), más `semana` con el estado del presupuesto. La
+aritmética está aislada en `computeAllowance` y se prueba sin base de datos en
+[`scripts/whatsapp-quota.test.ts`](scripts/whatsapp-quota.test.ts).
 
 **Modo prueba:** con `WHATSAPP_REDIRECT_ALL_TO`, todo mensaje que sale va a ese número. Los estados
 se guardan igual (es lo que se prueba) y quedan marcados `test: true` en `audit_log`; las fichas que

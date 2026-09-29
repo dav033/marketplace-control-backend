@@ -168,24 +168,28 @@ export async function suppress(waId: string, reason: string, source: string): Pr
 }
 
 /**
- * Cuántos contactos salieron hoy.
- *
- * Meta asigna un cupo diario que sube o baja según la calidad de la cuenta, y gastarlo de golpe el
- * primer día es la forma rápida de que lo bajen. Se cuenta sobre conversaciones creadas hoy, que es
- * exactamente una por número contactado.
- */
-/**
- * Invitaciones enviadas en las últimas 24 horas, que es como mide Meta su cupo.
+ * Invitaciones enviadas en las últimas 24 horas y en los últimos 7 días.
  *
  * Cuenta por proveedor (`whatsapp_sent_at`) y no por conversación: en modo prueba todas las
  * invitaciones llegan al mismo número y comparten conversación, y el cupo tiene que seguir contando.
+ *
+ * Las dos ventanas salen de una sola consulta porque el cupo las mira siempre juntas, una vez por
+ * envío: el día es el ritmo y la semana es el presupuesto del que ese día puede tomar prestado.
  */
-export async function countOutreachToday(): Promise<number> {
-  if (!pool) return 0;
-  const result = await query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM marketplace.providers WHERE whatsapp_sent_at >= now() - interval '24 hours'`,
+export async function countOutreachWindows(): Promise<{ day: number; week: number }> {
+  if (!pool) return { day: 0, week: 0 };
+  const result = await query<{ day: number; week: number }>(
+    `SELECT (count(*) FILTER (WHERE whatsapp_sent_at >= now() - interval '24 hours'))::int AS day,
+            count(*)::int AS week
+       FROM marketplace.providers
+      WHERE whatsapp_sent_at >= now() - interval '7 days'`,
   );
-  return result.rows[0]?.n ?? 0;
+  return { day: result.rows[0]?.day ?? 0, week: result.rows[0]?.week ?? 0 };
+}
+
+/** Las últimas 24 horas, que es como mide Meta su cupo diario. */
+export async function countOutreachToday(): Promise<number> {
+  return (await countOutreachWindows()).day;
 }
 
 /**

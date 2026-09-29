@@ -1,7 +1,6 @@
 import type { APIRoute } from 'astro';
 import { announceCity, announcementPlan, cityTemplateName, type Audience } from '../../../../lib/cities';
-import { dailyLimit } from '../../../../lib/whatsapp-outreach';
-import { countOutreachToday } from '../../../../lib/whatsapp-store';
+import { outreachAllowance } from '../../../../lib/whatsapp-outreach';
 import { isWhatsappConfigured, normalizeTestNumber, redirectTarget, testNumbers } from '../../../../lib/whatsapp';
 
 /**
@@ -39,7 +38,7 @@ export const GET: APIRoute = async ({ params, url }) => {
   const motivos = new Map<string, number>();
   for (const item of plan.skipped) motivos.set(item.reason, (motivos.get(item.reason) ?? 0) + 1);
 
-  const limite = dailyLimit();
+  const cupo = await outreachAllowance();
   const template = cityTemplateName();
   return json({
     ok: true,
@@ -53,7 +52,11 @@ export const GET: APIRoute = async ({ params, url }) => {
     // Que la plantilla exista no garantiza que Meta la haya aprobado ya; si no lo está, esos envíos
     // fallan con SEND_FAILED y se ven en el resumen.
     plantillaLista: isWhatsappConfigured() && Boolean(template),
-    cupoDisponible: Math.max(0, limite - await countOutreachToday()),
+    // Lo que se puede enviar ahora, con lo prestado de la semana dentro; `cupoPrestado` dice cuánto
+    // de esa cifra sale del pool y no del ritmo del día.
+    cupoDisponible: cupo.available,
+    cupoPrestado: cupo.borrowed,
+    cupoSemana: cupo.weeklyRemaining,
     redirigidoA: redirectTarget(),
     numerosPrueba: testNumbers(),
     filtros,

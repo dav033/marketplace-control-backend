@@ -1,7 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getOutreachSeeds } from '../../../lib/data';
-import { dailyLimit, startOutreachBatch, type BatchOutreachResult } from '../../../lib/whatsapp-outreach';
-import { countOutreachToday } from '../../../lib/whatsapp-store';
+import { outreachAllowance, startOutreachBatch, type BatchOutreachResult } from '../../../lib/whatsapp-outreach';
 import { isWhatsappConfigured, normalizeTestNumber, redirectTarget, testNumbers } from '../../../lib/whatsapp';
 
 const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? process.env[name];
@@ -22,15 +21,23 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 }
 
-/** Lo que el panel enseña antes de disparar nada: cupo, si se puede enviar y si está en modo prueba. */
+/**
+ * Lo que el panel enseña antes de disparar nada: cupo, si se puede enviar y si está en modo prueba.
+ *
+ * `disponibles` es lo que de verdad se puede enviar ahora mismo, con lo prestado de la semana ya
+ * dentro; `base` y `prestado` lo parten en dos para poder decir de dónde sale cada envío.
+ */
 export const GET: APIRoute = async () => {
-  const limite = dailyLimit();
-  const enviados = await countOutreachToday();
+  const cupo = await outreachAllowance();
   return json({
     ok: true,
-    limite,
-    enviados,
-    disponibles: Math.max(0, limite - enviados),
+    limite: cupo.dailyLimit,
+    enviados: cupo.sentToday,
+    disponibles: cupo.available,
+    base: cupo.base,
+    prestado: cupo.borrowed,
+    topeDia: cupo.burstLimit,
+    semana: { limite: cupo.weeklyLimit, enviados: cupo.sentThisWeek, disponibles: cupo.weeklyRemaining },
     configurado: isWhatsappConfigured(),
     plantilla: env('WHATSAPP_OUTREACH_TEMPLATE') || null,
     redirigidoA: redirectTarget(),

@@ -1,5 +1,5 @@
 import { fillTemplate, getTemplateInfo, isWhatsappConfigured, resolveTestTarget, sendTemplate } from './whatsapp';
-import { countOutreachToday, getConversation, isSuppressed, recordOutboundMessage, startConversation } from './whatsapp-store';
+import { countOutreachWindows, getConversation, isSuppressed, recordOutboundMessage, startConversation } from './whatsapp-store';
 import { stateFromProvider } from './conversation-runner';
 import { setProviderWhatsappStatus } from './data';
 import type { SeedProvider } from './registration-chat';
@@ -22,20 +22,33 @@ const env = (name: string) => import.meta.env?.[name as keyof ImportMetaEnv] ?? 
  */
 
 /**
- * Cuántos contactos nuevos se permiten al día.
+ * EL CUPO: un ritmo diario y un pool semanal del que un día puntual puede tomar prestado.
  *
  * Meta asigna un cupo que sube o baja según la calidad de la cuenta, y la calidad baja cuando la
- * gente bloquea o reporta. Gastar el cupo de golpe el primer día es la forma rápida de que lo
- * recorten, así que el límite por defecto es conservador y se sube cuando la cuenta lo aguante.
+ * gente bloquea o reporta. Gastarlo de golpe el primer día es la forma rápida de que lo recorten.
+ * Pero atarse a un número fijo por día desperdicia la semana: los días sin candidatos listos no se
+ * recuperan nunca.
+ *
+ * De ahí los tres topes, cada uno con un trabajo distinto:
+ *   - `dailyLimit()` es el RITMO: lo que sale en un día sin tocar el pool.
+ *   - `weeklyLimit()` es el PRESUPUESTO real: nada puede pasarse de aquí.
+ *   - `dailyBurstLimit()` es el TECHO de un día: hasta aquí puede estirarse tomando prestado, y ni
+ *     uno más, para que un día con el pool intacto no dispare la semana entera de una sentada.
+ *
+ * Las dos ventanas son móviles —últimas 24 horas y últimos 7 días—, igual que el cupo diario de
+ * antes: el pool se recupera solo y no hay día de reinicio en el que se pierda lo que no se usó.
  */
-const DEFAULT_DAILY_LIMIT = 20;
+const DEFAULT_DAILY_LIMIT = 30;
+const WEEKLY_POOL_DAYS = 7;
+const DEFAULT_BURST_MULTIPLIER = 2;
 
 export type OutreachResult =
   | { ok: true; to: string; deliveredTo: string; templateName: string }
   | {
       ok: false;
       reason: 'WHATSAPP_NOT_CONFIGURED' | 'TEMPLATE_NOT_CONFIGURED' | 'PHONE_MISSING'
-        | 'ALREADY_CONTACTED' | 'SUPPRESSED' | 'DAILY_LIMIT_REACHED' | 'SEND_FAILED' | 'NOT_FOUND';
+        | 'ALREADY_CONTACTED' | 'SUPPRESSED' | 'DAILY_LIMIT_REACHED' | 'WEEKLY_LIMIT_REACHED'
+        | 'SEND_FAILED' | 'NOT_FOUND';
     };
 
 /** Meta espera el número sin `+`, espacios ni guiones: solo dígitos con indicativo de país. */
@@ -61,9 +74,93 @@ export function outreachTranscript(seed: SeedProvider): string {
   return `Hola 👋 Te escribimos de Happia. Encontramos a ${seed.displayName.trim()} en ${seed.city ?? 'tu ciudad'} y nos encantaría sumarte a nuestro catálogo de proveedores para eventos (bodas, cumpleaños y eventos de empresa). Estar en el catálogo no tiene costo. ¿Te gustaría saber más?`;
 }
 
+/** Un entero positivo, o el de respaldo: un valor ilegible no puede ensanchar el cupo. */
+function positiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** El ritmo: lo que sale en 24 horas sin tocar el pool de la semana. */
 export function dailyLimit(): number {
-  const configured = Number(env('WHATSAPP_DAILY_OUTREACH_LIMIT'));
-  return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_DAILY_LIMIT;
+  return positiveInt(env('WHATSAPP_DAILY_OUTREACH_LIMIT'), DEFAULT_DAILY_LIMIT);
+}
+
+/** El presupuesto de los últimos 7 días. Por defecto, la semana entera al ritmo diario. */
+export function weeklyLimit(): number {
+  return positiveInt(env('WHATSAPP_WEEKLY_OUTREACH_LIMIT'), dailyLimit() * WEEKLY_POOL_DAYS);
+}
+
+/**
+ * El techo de un día, prestado incluido.
+ *
+ * Nunca por debajo del ritmo diario —un techo más bajo que el ritmo lo dejaría sin sentido— ni por
+ * encima del presupuesto semanal, que es el que manda sobre todo lo demás.
+ */
+export function dailyBurstLimit(): number {
+  const configured = positiveInt(env('WHATSAPP_DAILY_OUTREACH_BURST'), dailyLimit() * DEFAULT_BURST_MULTIPLIER);
+  return Math.min(weeklyLimit(), Math.max(dailyLimit(), configured));
+}
+
+export type OutreachBlockReason = 'DAILY_LIMIT_REACHED' | 'WEEKLY_LIMIT_REACHED';
+
+export type OutreachAllowance = {
+  dailyLimit: number;
+  weeklyLimit: number;
+  burstLimit: number;
+  sentToday: number;
+  sentThisWeek: number;
+  /** Lo que queda del pool de la semana. */
+  weeklyRemaining: number;
+  /** Cuántos se pueden enviar ahora mismo, contando lo prestado. */
+  available: number;
+  /** De esos, cuántos caben en el ritmo diario sin tocar el pool. */
+  base: number;
+  /** Y cuántos saldrían prestados de la semana. */
+  borrowed: number;
+  /** Cuál de los dos topes se agota primero; es el motivo con el que se rechaza al llegar a cero. */
+  exhaustedReason: OutreachBlockReason;
+  /** Solo cuando ya no cabe ni un envío más. */
+  blocked?: OutreachBlockReason;
+};
+
+/**
+ * La aritmética del cupo, aparte de la base para poder probarla sin ella.
+ *
+ * `available` es lo único que decide si se envía: el mínimo entre lo que le queda al día y lo que le
+ * queda a la semana. `base` y `borrowed` solo parten esa cifra en dos para poder decir en el panel
+ * cuánto se está tomando prestado.
+ */
+export function computeAllowance(input: {
+  sentToday: number; sentThisWeek: number; daily: number; weekly: number; burst: number;
+}): OutreachAllowance {
+  const weeklyRemaining = Math.max(0, input.weekly - input.sentThisWeek);
+  const burstRemaining = Math.max(0, input.burst - input.sentToday);
+  const available = Math.min(burstRemaining, weeklyRemaining);
+  const base = Math.min(Math.max(0, input.daily - input.sentToday), available);
+  // En empate manda la semana: esperar a mañana devuelve cupo del día, pero no devuelve pool.
+  const exhaustedReason: OutreachBlockReason = weeklyRemaining <= burstRemaining ? 'WEEKLY_LIMIT_REACHED' : 'DAILY_LIMIT_REACHED';
+  return {
+    dailyLimit: input.daily,
+    weeklyLimit: input.weekly,
+    burstLimit: input.burst,
+    sentToday: input.sentToday,
+    sentThisWeek: input.sentThisWeek,
+    weeklyRemaining,
+    available,
+    base,
+    borrowed: available - base,
+    exhaustedReason,
+    ...(available === 0 ? { blocked: exhaustedReason } : {}),
+  };
+}
+
+/** El cupo ahora mismo: lo enviado en 24 horas y en 7 días, contra los tres topes. */
+export async function outreachAllowance(): Promise<OutreachAllowance> {
+  const { day, week } = await countOutreachWindows();
+  return computeAllowance({
+    sentToday: day, sentThisWeek: week,
+    daily: dailyLimit(), weekly: weeklyLimit(), burst: dailyBurstLimit(),
+  });
 }
 
 export async function startOutreach(
@@ -95,7 +192,8 @@ export async function startOutreach(
     if (await getConversation(realTo)) return { ok: false, reason: 'ALREADY_CONTACTED' };
   }
 
-  if (await countOutreachToday() >= dailyLimit()) return { ok: false, reason: 'DAILY_LIMIT_REACHED' };
+  const cupo = await outreachAllowance();
+  if (cupo.blocked) return { ok: false, reason: cupo.blocked };
 
   // Cada plantilla trae lo suyo: la de invitación lleva dos huecos (negocio y ciudad) y otras, como la
   // de presentación, ninguno. Mandar parámetros de más hace que Meta rechace el envío entero, así que
@@ -136,8 +234,8 @@ export type BatchOutreachResult = {
 /**
  * Contacta varios candidatos respetando el cupo.
  *
- * Se para en cuanto el cupo se agota en vez de seguir intentando: cada rechazo por límite es una
- * llamada a Meta que no aporta nada y ensucia las métricas de la cuenta.
+ * Se para en cuanto el cupo se agota —por el día o por la semana— en vez de seguir intentando: cada
+ * rechazo por límite es una llamada a Meta que no aporta nada y ensucia las métricas de la cuenta.
  */
 export async function startOutreachBatch(
   seeds: Array<SeedProvider & { whatsappStatus?: WhatsappStatus | null }>,
@@ -150,7 +248,7 @@ export async function startOutreachBatch(
     const outcome = await startOutreach(seed, { whatsappStatus: seed.whatsappStatus, testNumber: options.testNumber });
     results.push({ providerId: seed.providerId, displayName: seed.displayName, outcome });
     if (outcome.ok) sent += 1;
-    if (!outcome.ok && outcome.reason === 'DAILY_LIMIT_REACHED') break;
+    if (!outcome.ok && (outcome.reason === 'DAILY_LIMIT_REACHED' || outcome.reason === 'WEEKLY_LIMIT_REACHED')) break;
   }
 
   return { sent, results };

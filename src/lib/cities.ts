@@ -1,8 +1,8 @@
 import { pool, query } from './db';
 import { REGISTER_URL } from './registration-fields';
 import { fillTemplate, getTemplateInfo, isWhatsappConfigured, resolveTestTarget, sendTemplate } from './whatsapp';
-import { countOutreachToday, isSuppressed, latestStateForProvider, recordOutboundMessage, startConversation } from './whatsapp-store';
-import { dailyLimit, toWhatsappNumber } from './whatsapp-outreach';
+import { isSuppressed, latestStateForProvider, recordOutboundMessage, startConversation } from './whatsapp-store';
+import { outreachAllowance, toWhatsappNumber } from './whatsapp-outreach';
 import { stateFromProvider } from './conversation-runner';
 import { setProviderWhatsappStatus } from './data';
 import { applyStatusEvents, type WhatsappStatus } from './conversation-status';
@@ -247,14 +247,17 @@ export async function announceCity(
   // Cuántos huecos espera la plantilla configurada: la de apertura genérica no lleva ninguno, y
   // mandarle parámetros de más hace que Meta rechace el envío.
   const templateInfo = templateName ? await getTemplateInfo(templateName) : null;
-  let enviadosHoy = await countOutreachToday();
+  // El cupo se consulta una vez y se descuenta aquí: los envíos de este bucle todavía no están en la
+  // base cuando toca decidir el siguiente, así que volver a preguntárselo no cambiaría la cuenta.
+  const cupo = await outreachAllowance();
+  let cupoRestante = cupo.available;
 
   for (const target of whatsappTargets) {
     const fail = (reason: string) => results.push({ providerId: target.providerId, displayName: target.displayName, channel: 'whatsapp', ok: false, reason });
     if (!isWhatsappConfigured()) { fail('WHATSAPP_NOT_CONFIGURED'); continue; }
     if (!templateName) { fail('TEMPLATE_NOT_CONFIGURED'); continue; }
     if (!redirect && await isSuppressed(target.phone!)) { fail('SUPPRESSED'); continue; }
-    if (enviadosHoy >= dailyLimit()) { fail('DAILY_LIMIT_REACHED'); continue; }
+    if (cupoRestante <= 0) { fail(cupo.exhaustedReason); continue; }
 
     const transcript = announcementTranscript(target.displayName, plan.city.name, templateInfo);
     const parametros = [target.displayName, plan.city.name].slice(0, templateInfo?.variables ?? 2);
@@ -266,7 +269,7 @@ export async function announceCity(
       fail('SEND_FAILED');
       continue;
     }
-    enviadosHoy += 1;
+    cupoRestante -= 1;
 
     // La conversación queda lista con la ficha del proveedor: si contesta al anuncio, el agente sabe
     // con quién habla y qué se le dijo.
