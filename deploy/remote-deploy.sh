@@ -30,7 +30,7 @@ install -d -m 0755 -o root -g root "$deploy_path" "$deploy_path/releases"
 release_dir="$deploy_path/releases/$release_id"
 previous_target="$(readlink -f "$deploy_path/current" 2>/dev/null || true)"
 if [[ "$previous_target" == "$release_dir" ]]; then
-  curl --fail --silent --show-error --max-time 15 http://127.0.0.1:4321/ >/dev/null || fail 'release activo no responde'
+  curl --fail --silent --show-error --max-time 15 http://172.20.0.1:4321/api/health >/dev/null || fail 'release activo no responde'
   printf 'Deploy ya activo: %s\n' "$release_id"
   exit 0
 fi
@@ -53,7 +53,7 @@ ln -sfn "$release_dir" "$deploy_path/current.next"
 mv -Tf "$deploy_path/current.next" "$deploy_path/current"
 if ! systemctl restart marketplace-control.service || \
    ! systemctl is-active --quiet marketplace-control.service || \
-   ! curl --fail --silent --show-error --max-time 15 http://127.0.0.1:4321/ >/dev/null; then
+   ! curl --fail --silent --show-error --max-time 15 http://172.20.0.1:4321/api/health >/dev/null; then
   if [[ -n "$previous_target" && -d "$previous_target" ]]; then
     ln -sfn "$previous_target" "$deploy_path/current.next"
     mv -Tf "$deploy_path/current.next" "$deploy_path/current"
