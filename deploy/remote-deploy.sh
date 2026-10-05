@@ -11,6 +11,16 @@ app_user="$(decode_b64 "$2")"
 release_id="$3"
 archive="/tmp/marketplace-control-${release_id}.tar.gz"
 env_file="/etc/marketplace-control/marketplace-control.env"
+health_url="http://172.20.0.1:4321/api/health"
+
+wait_for_health() {
+  local attempt
+  for attempt in {1..30}; do
+    if curl --fail --silent --max-time 3 "$health_url" >/dev/null; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
 
 [[ "$deploy_path" == "/srv/marketplace-control" ]] || fail 'DEPLOY_PATH invalido'
 [[ "$app_user" == "ec2-user" ]] || fail 'DEPLOY_USER invalido'
@@ -30,7 +40,7 @@ install -d -m 0755 -o root -g root "$deploy_path" "$deploy_path/releases"
 release_dir="$deploy_path/releases/$release_id"
 previous_target="$(readlink -f "$deploy_path/current" 2>/dev/null || true)"
 if [[ "$previous_target" == "$release_dir" ]]; then
-  curl --fail --silent --show-error --max-time 15 http://172.20.0.1:4321/api/health >/dev/null || fail 'release activo no responde'
+  wait_for_health || fail 'release activo no responde'
   printf 'Deploy ya activo: %s\n' "$release_id"
   exit 0
 fi
@@ -53,11 +63,12 @@ ln -sfn "$release_dir" "$deploy_path/current.next"
 mv -Tf "$deploy_path/current.next" "$deploy_path/current"
 if ! systemctl restart marketplace-control.service || \
    ! systemctl is-active --quiet marketplace-control.service || \
-   ! curl --fail --silent --show-error --max-time 15 http://172.20.0.1:4321/api/health >/dev/null; then
+   ! wait_for_health; then
   if [[ -n "$previous_target" && -d "$previous_target" ]]; then
     ln -sfn "$previous_target" "$deploy_path/current.next"
     mv -Tf "$deploy_path/current.next" "$deploy_path/current"
     systemctl restart marketplace-control.service || true
+    wait_for_health || true
   fi
   fail 'Marketplace no paso la verificacion; se intento rollback'
 fi
